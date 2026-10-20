@@ -56,3 +56,53 @@ def ensure_ast_records(
     records = extract_all(units)
     save_ast_records(records, path, fingerprint)
     return records, reason
+
+
+# --------------------------------------------------------------------------- fragments
+
+from structsearch.parsing.fragments import (  # noqa: E402  (kept next to the code that uses it)
+    FRAGMENT_VERSION,
+    FragmentRecord,
+    extract_all_fragments,
+)
+
+FRAGMENT_FILE = "fragments.jsonl"
+
+
+def save_fragment_records(records: Sequence[FragmentRecord], path: Union[str, Path], fingerprint: str) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    header = {"_meta": {"extraction_version": FRAGMENT_VERSION, "fingerprint": fingerprint}}
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(json.dumps(header) + "\n")
+        for record in records:
+            handle.write(json.dumps(record.to_dict()) + "\n")
+
+
+def load_fragment_records(path: Union[str, Path]) -> Optional[Tuple[str, List[FragmentRecord]]]:
+    """Return (fingerprint, records), or None if the file is missing, unreadable or outdated."""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            meta = json.loads(handle.readline())["_meta"]
+            if meta.get("extraction_version") != FRAGMENT_VERSION:
+                return None
+            return meta["fingerprint"], [FragmentRecord.from_dict(json.loads(l)) for l in handle if l.strip()]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def ensure_fragment_records(
+    units: Sequence[CodeUnit], index_dir: Union[str, Path]
+) -> Tuple[List[FragmentRecord], Optional[str]]:
+    """Same contract as ensure_ast_records, for fragment terms (fragments.jsonl)."""
+    path = Path(index_dir) / FRAGMENT_FILE
+    fingerprint = fingerprint_units(units)
+    cached = load_fragment_records(path)
+    if cached is not None and cached[0] == fingerprint:
+        by_id = {r.unit_id: r for r in cached[1]}
+        if all(u.unit_id in by_id for u in units):
+            return [by_id[u.unit_id] for u in units], None
+    reason = "no fragment index yet" if cached is None else "units changed"
+    records = extract_all_fragments(units)
+    save_fragment_records(records, path, fingerprint)
+    return records, reason

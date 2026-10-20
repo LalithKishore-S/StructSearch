@@ -50,3 +50,13 @@ def validate_config(cfg: Dict[str, Any]) -> None:
             raise ValueError("dense.timeout_seconds must be > 0")
         if not str(dense.get("model", "x")).strip():
             raise ValueError("dense.model must not be empty")
+    llm = cfg.get("llm")
+    if llm is not None:
+        if llm.get("backend", "ollama") != "ollama":
+            raise ValueError("llm.backend must be 'ollama'")
+        if not isinstance(llm.get("enabled", False), bool):
+            raise ValueError("llm.enabled must be true or false")
+        if not str(llm.get("model", "x")).strip():
+            raise ValueError("llm.model must not be empty")
+        if float(llm.get("timeout_seconds", 60)) <= 0:
+            raise ValueError("llm.timeout_seconds must be > 0")
