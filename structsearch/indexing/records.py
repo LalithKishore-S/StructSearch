@@ -10,7 +10,7 @@ from typing import Iterable, List
 
 from structsearch.indexing.tokenizer import WORD_RE
 from structsearch.ingestion.segmenter import parse_unit
-from structsearch.schemas import PARSE_OK, CodeUnit, TextRecord
+from structsearch.schemas import PARSEABLE, CodeUnit, TextRecord
 
 _KEYWORDS = frozenset(keyword.kwlist)
 _COMMENT_RE = re.compile(r"#\s*(.*)$")
@@ -89,7 +89,7 @@ def build_text_record(unit: CodeUnit) -> TextRecord:
     docstring = ""
     comments = ""
     parsed = False
-    if unit.parse_status == PARSE_OK:
+    if unit.parse_status in PARSEABLE:
         try:
             node = parse_unit(unit)
             identifiers = _ast_identifiers(node)

@@ -53,11 +53,12 @@ def build_all(
     index_dir: Union[str, Path],
     cfg: Optional[Dict[str, Any]] = None,
     include_failed: bool = True,
+    tolerant: bool = False,
 ) -> Tuple[IngestResult, BM25Index]:
     """Ingest a corpus, build the BM25 index and save everything to index_dir."""
     index_dir = Path(index_dir)
     signature = corpus_signature(corpus)  # taken before reading, so edits during a build are caught later
-    result = ingest_corpus(corpus, include_failed=include_failed)
+    result = ingest_corpus(corpus, include_failed=include_failed, tolerant=tolerant)
     save_units(result.units, index_dir / UNITS_FILE)
     save_failed(result.failed_files, index_dir / FAILED_FILE)
     index = build_index(result.units, cfg)
@@ -67,6 +68,7 @@ def build_all(
         "corpus": str(Path(corpus).resolve()),
         "signature": signature,
         "include_failed": include_failed,
+        "tolerant": tolerant,
     }
     (index_dir / META_FILE).write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return result, index
@@ -103,6 +105,7 @@ def ensure_index(
     cfg: Optional[Dict[str, Any]] = None,
     include_failed: bool = True,
     rebuild: bool = False,
+    tolerant: bool = False,
 ) -> Tuple[List[CodeUnit], BM25Index, Optional[str]]:
     """Load the saved index, or (re)build it when missing or out of date.
 
@@ -120,10 +123,12 @@ def ensure_index(
         reason = "corpus path changed"
     elif meta.get("include_failed") != include_failed:
         reason = "failed-file setting changed"
+    elif bool(meta.get("tolerant", False)) != tolerant:
+        reason = "tolerant-parsing setting changed"
     elif meta.get("signature") != corpus_signature(corpus):
         reason = "corpus files changed"
     if reason:
-        result, index = build_all(corpus, index_dir, cfg, include_failed)
+        result, index = build_all(corpus, index_dir, cfg, include_failed, tolerant)
         return result.units, index, reason
     units, index = load_all(index_dir, cfg)
     return units, index, None

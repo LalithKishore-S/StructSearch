@@ -24,7 +24,7 @@ from collections import Counter
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from structsearch.ingestion.segmenter import parse_unit
-from structsearch.schemas import PARSE_FAILED, PARSE_OK, AstRecord, CodeUnit
+from structsearch.schemas import PARSE_FAILED, PARSE_OK, PARSEABLE, AstRecord, CodeUnit
 
 EXTRACTION_VERSION = "1"
 NODE_PREFIX = "node:"
@@ -228,7 +228,7 @@ def extract_from_node(
 
 def extract_features(unit: CodeUnit) -> AstRecord:
     """AstRecord for one unit. Units from files that did not parse get no features."""
-    if unit.parse_status != PARSE_OK:
+    if unit.parse_status not in PARSEABLE:
         return AstRecord(unit.unit_id, {}, EXTRACTION_VERSION, PARSE_FAILED)
     try:
         node = parse_unit(unit)
@@ -237,7 +237,7 @@ def extract_features(unit: CodeUnit) -> AstRecord:
     fn_name, class_name = _names_from_unit_id(unit)
     line_count = len(unit.source_text.split("\n"))
     features = extract_from_node(node, fn_name, class_name, line_count)
-    return AstRecord(unit.unit_id, features, EXTRACTION_VERSION, PARSE_OK)
+    return AstRecord(unit.unit_id, features, EXTRACTION_VERSION, unit.parse_status)
 
 
 def extract_all(units: Iterable[CodeUnit]) -> List[AstRecord]:

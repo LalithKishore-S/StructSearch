@@ -19,7 +19,8 @@ import re
 from pathlib import PurePosixPath
 from typing import List, Tuple
 
-from structsearch.schemas import PARSE_FAILED, PARSE_OK, CodeUnit
+from structsearch.ingestion.repair import repair_source
+from structsearch.schemas import PARSE_FAILED, PARSE_OK, PARSE_PARTIAL, CodeUnit
 
 _FUNC = (ast.FunctionDef, ast.AsyncFunctionDef)
 _NEWLINE = re.compile(r"\r\n|\r|\n")
@@ -97,10 +98,16 @@ def parse_unit(unit: CodeUnit) -> ast.AST:
     Handles indented methods. Line numbers in the returned node are relative to
     the unit (and shifted by one for indented methods).
     """
+    source = unit.source_text
+    if unit.parse_status == PARSE_PARTIAL:  # syntax-error lines skipped, see ingestion/repair.py
+        repaired = repair_source(source)
+        if repaired is None:
+            raise ValueError(f"{unit.unit_id} cannot be repaired")
+        source = repaired[0]
     try:
-        body = ast.parse(unit.source_text).body
+        body = ast.parse(source).body
     except SyntaxError:
-        body = ast.parse("if True:\n" + unit.source_text).body[0].body
+        body = ast.parse("if True:\n" + source).body[0].body
     node = body[0]
     if not isinstance(node, _FUNC):
         raise ValueError(f"{unit.unit_id} is not a function definition")

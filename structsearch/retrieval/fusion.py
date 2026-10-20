@@ -38,7 +38,7 @@ from structsearch.retrieval.structural import (
     match_evidence,
     match_unit,
 )
-from structsearch.schemas import PARSE_OK, AstRecord, CodeUnit, RankedResult
+from structsearch.schemas import PARSEABLE, AstRecord, CodeUnit, RankedResult
 
 SIGNALS = ("text", "dense", "structural", "graph")
 EPS = 1e-12
@@ -200,7 +200,7 @@ def structural_signal(
     matches: Dict[str, UnitMatch] = {}
     scores: Dict[str, float] = {}
     for record in ast_records:
-        if record.parse_status == PARSE_OK:
+        if record.parse_status in PARSEABLE:
             match = match_unit(profile, record.features, terms_by_id.get(record.unit_id))
             matches[record.unit_id] = match
             scores[record.unit_id] = match.score

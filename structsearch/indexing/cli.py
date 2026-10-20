@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 from pathlib import Path
 from typing import List, Optional
 
 from structsearch.config import load_config
 from structsearch.indexing.builder import build_all, load_all
+from structsearch.parsing.tolerant import TolerantUnavailable
+from structsearch.schemas import status_flag
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -23,6 +26,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--index-dir", default=cfg["index_dir"])
     parser.add_argument("--load", action="store_true", help="use the saved index, do not re-ingest")
     parser.add_argument("--skip-failed", action="store_true", help="exclude unparseable files")
+    parser.add_argument("--tolerant", action="store_true", help="recover functions from files that do not parse (needs tree-sitter)")
     parser.add_argument("--query", help="run a query after building/loading")
     parser.add_argument("-k", type=int, default=cfg["top_k"])
     args = parser.parse_args(argv)
@@ -33,7 +37,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         units, index = load_all(index_dir, cfg)
         print(f"loaded {len(units)} units from {index_dir}")
     else:
-        result, index = build_all(args.corpus, index_dir, cfg, include_failed=not args.skip_failed)
+        try:
+            result, index = build_all(args.corpus, index_dir, cfg, include_failed=not args.skip_failed, tolerant=args.tolerant)
+        except TolerantUnavailable as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
         units = result.units
         print(f"files scanned : {result.files_scanned}")
         print(f"units indexed : {len(units)}")
@@ -46,7 +54,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f'\nTop {len(hits)} for "{args.query}":')
         for rank, hit in enumerate(hits, 1):
             unit = by_id[hit.unit_id]
-            flag = "  [parse failed]" if unit.parse_status != "ok" else ""
+            flag = status_flag(unit)
             fields = index.explain(args.query, hit.unit_id)
             matched = "; ".join(f"{f}: {', '.join(t)}" for f, t in fields.items())
             print(f"{rank:2d}. {hit.score:7.3f}  {hit.unit_id}  [{unit.start_line}-{unit.end_line}]{flag}")

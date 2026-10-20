@@ -31,7 +31,7 @@ from structsearch.llm.ollama import LLMError, LLMSettings, ModelMissingError, Ol
 from structsearch.parsing.features import FEATURE_DOC, FEATURE_NAMES
 from structsearch.parsing.fragments import BASE_LABELS, FragmentRecord, describe_term
 from structsearch.retrieval.patterns import PatternError, Relation, holds, parse_pattern, witnesses
-from structsearch.schemas import PARSE_OK, AstRecord, CodeUnit, RankedResult
+from structsearch.schemas import PARSEABLE, AstRecord, CodeUnit, RankedResult
 
 OPS = ("present", "absent", "at_least", "at_most")
 MAX_CONSTRAINTS = 8
@@ -162,7 +162,7 @@ def structural_scores(
     """unit_id -> score for every unit (0.0 for units whose file did not parse). Used by fusion."""
     terms_by_id = {f.unit_id: f.terms for f in fragments or ()}
     return {
-        r.unit_id: (match_unit(profile, r.features, terms_by_id.get(r.unit_id)).score if r.parse_status == PARSE_OK else 0.0)
+        r.unit_id: (match_unit(profile, r.features, terms_by_id.get(r.unit_id)).score if r.parse_status in PARSEABLE else 0.0)
         for r in records
     }
 
@@ -198,7 +198,7 @@ def structural_search(
     terms_by_id = {f.unit_id: f.terms for f in fragments or ()}
     scored = []
     for record in records:
-        if record.parse_status != PARSE_OK or record.unit_id not in units_by_id:
+        if record.parse_status not in PARSEABLE or record.unit_id not in units_by_id:
             continue
         match = match_unit(profile, record.features, terms_by_id.get(record.unit_id))
         if match.score > 0:

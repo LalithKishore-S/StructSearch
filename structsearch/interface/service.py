@@ -52,6 +52,7 @@ class SearchRequest:
     corpus: str = "."
     index_dir: str = ".structsearch_index"
     skip_failed: bool = False
+    tolerant: bool = False  # recover functions from files that do not parse (needs tree-sitter)
     rebuild: bool = False
     query_id: str = "adhoc"
     embedder: Optional[str] = None  # "ollama" or "hashing"; None = config
@@ -73,11 +74,12 @@ class SearchResponse:
 # --------------------------------------------------------------------------- building blocks
 
 
-def load_corpus(corpus: str, index_dir: str, skip_failed: bool, rebuild: bool, notify: Notify = _silent):
+def load_corpus(corpus: str, index_dir: str, skip_failed: bool, rebuild: bool, notify: Notify = _silent,
+                tolerant: bool = False):
     path = Path(corpus)
     if not path.exists():
         raise SearchError(f"corpus path not found: {corpus}")
-    units, index, reason = ensure_index(path, index_dir, include_failed=not skip_failed, rebuild=rebuild)
+    units, index, reason = ensure_index(path, index_dir, include_failed=not skip_failed, rebuild=rebuild, tolerant=tolerant)
     if reason:
         notify(f"index built ({reason}): {len(units)} units -> {index_dir}")
     return units, index
@@ -162,7 +164,7 @@ def run_search(
         raise SearchError(f"unknown mode '{req.mode}' (choose from {', '.join(MODES)})")
     if req.k < 1:
         raise SearchError("-k must be at least 1")
-    units, bm25_index = load_corpus(req.corpus, req.index_dir, req.skip_failed, req.rebuild, notify)
+    units, bm25_index = load_corpus(req.corpus, req.index_dir, req.skip_failed, req.rebuild, notify, req.tolerant)
     units_by_id = {u.unit_id: u for u in units}
     failed_by_path = {f.rel_path: f for f in load_failed(Path(req.index_dir) / FAILED_FILE)}
     extra: Dict[str, Any] = {}

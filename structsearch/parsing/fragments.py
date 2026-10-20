@@ -32,7 +32,7 @@ from collections import Counter
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from structsearch.ingestion.segmenter import parse_unit
-from structsearch.schemas import PARSE_FAILED, PARSE_OK, CodeUnit
+from structsearch.schemas import PARSE_FAILED, PARSE_OK, PARSEABLE, CodeUnit
 
 FRAGMENT_VERSION = "1"
 MAX_ORD_NODES = 300  # ordering pairs are quadratic; very large functions only get their first nodes
@@ -217,13 +217,13 @@ class FragmentRecord:
 
 
 def extract_fragments(unit: CodeUnit) -> FragmentRecord:
-    if unit.parse_status != PARSE_OK:
+    if unit.parse_status not in PARSEABLE:
         return FragmentRecord(unit.unit_id, {}, FRAGMENT_VERSION, PARSE_FAILED)
     try:
         node = parse_unit(unit)
     except (SyntaxError, ValueError, RecursionError):
         return FragmentRecord(unit.unit_id, {}, FRAGMENT_VERSION, PARSE_FAILED)
-    return FragmentRecord(unit.unit_id, fragment_terms(node), FRAGMENT_VERSION, PARSE_OK)
+    return FragmentRecord(unit.unit_id, fragment_terms(node), FRAGMENT_VERSION, unit.parse_status)
 
 
 def extract_all_fragments(units: Iterable[CodeUnit]) -> List[FragmentRecord]:

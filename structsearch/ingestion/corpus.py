@@ -25,6 +25,8 @@ class FailedFile:
     rel_path: str
     error: str
     line: Optional[int] = None  # line of the syntax error, when known
+    recovered_units: int = 0  # function units recovered with --tolerant (Step 9)
+    error_lines: List[int] = field(default_factory=list)  # tree-sitter error rows (1-based), --tolerant only
 
 
 @dataclass
@@ -58,12 +60,19 @@ def _read_source(path: Path) -> Tuple[str, Optional[FailedFile]]:
         return text, FailedFile("", f"{type(exc).__name__}: {exc}", getattr(exc, "lineno", None))
 
 
-def ingest_corpus(root: Union[str, Path], include_failed: bool = True) -> IngestResult:
+def ingest_corpus(root: Union[str, Path], include_failed: bool = True, tolerant: bool = False) -> IngestResult:
     """Ingest all .py files under root.
 
     Unparseable files are never fatal. They are listed in failed_files and, unless
     include_failed is False, kept as one file-level unit with parse_status='failed'.
+    With tolerant=True (needs tree-sitter) the functions of such a file are recovered as separate units
+    (parse_status ok / partial / failed per function); a file with no recoverable function falls back
+    to the file-level unit. Raises TolerantUnavailable if tree-sitter is missing.
     """
+    if tolerant:
+        from structsearch.parsing.tolerant import _parser
+
+        _parser()  # fail early, before any work, with an install hint
     root = Path(root).resolve()
     base = root.parent if root.is_file() else root
     result = IngestResult()
@@ -87,6 +96,15 @@ def ingest_corpus(root: Union[str, Path], include_failed: bool = True) -> Ingest
         failure.rel_path = rel
         result.failed_files.append(failure)
         log.warning("parse failed for %s: %s", rel, failure.error)
+        if tolerant:
+            from structsearch.parsing.tolerant import tolerant_split
+
+            recovered, error_lines = tolerant_split(source, rel)
+            failure.error_lines = error_lines
+            failure.recovered_units = len(recovered)
+            if recovered:
+                result.units.extend(recovered)
+                continue
         if include_failed:
             result.units.append(make_file_unit(source, rel))
     result.units.sort(key=lambda u: u.unit_id)

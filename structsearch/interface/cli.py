@@ -29,6 +29,8 @@ from structsearch.indexing.builder import FAILED_FILE, ensure_index
 from structsearch.indexing.embedder import EmbeddingError
 from structsearch.ingestion.corpus import load_failed
 from structsearch.interface.explain import explain_results
+from structsearch.parsing.tolerant import TolerantUnavailable
+from structsearch.schemas import PARSEABLE, status_flag
 from structsearch.interface.format import format_results, result_to_dict
 from structsearch.interface.service import (
     MODES,
@@ -94,6 +96,7 @@ def _build_parser(cfg) -> argparse.ArgumentParser:
     index_p.add_argument("corpus", nargs="?", default=cfg["corpus_path"], help="folder (or file) to index")
     index_p.add_argument("--index-dir", default=cfg["index_dir"])
     index_p.add_argument("--skip-failed", action="store_true", help="leave unparseable files out")
+    index_p.add_argument("--tolerant", action="store_true", help="recover functions from files that do not parse (needs tree-sitter)")
     index_p.add_argument("--rebuild", action="store_true", help="force a rebuild")
     index_p.add_argument("--dense", action="store_true", help="also build the dense (embedding) index")
     _add_dense_args(index_p)
@@ -108,6 +111,7 @@ def _build_parser(cfg) -> argparse.ArgumentParser:
     search_p.add_argument("--json", action="store_true", help="machine-readable output")
     search_p.add_argument("--rebuild", action="store_true", help="force an index rebuild first")
     search_p.add_argument("--skip-failed", action="store_true", help="leave unparseable files out")
+    search_p.add_argument("--tolerant", action="store_true", help="recover functions from files that do not parse (needs tree-sitter)")
     search_p.add_argument("--query-id", default="adhoc", help="id stored in the result records")
     _add_dense_args(search_p)
     _add_llm_args(search_p)
@@ -157,6 +161,7 @@ def _build_parser(cfg) -> argparse.ArgumentParser:
     frag_p.add_argument("--kind", choices=("u", "pc", "ch3", "ad", "ord"), default=None, help="only one relation kind")
     frag_p.add_argument("--json", action="store_true")
     frag_p.add_argument("--skip-failed", action="store_true")
+    frag_p.add_argument("--tolerant", action="store_true", help="recover functions from files that do not parse (needs tree-sitter)")
     frag_p.add_argument("--rebuild", action="store_true")
 
     feat_p = sub.add_parser("features", help="show AST features of a unit (or a table of all units)")
@@ -165,6 +170,7 @@ def _build_parser(cfg) -> argparse.ArgumentParser:
     feat_p.add_argument("--index-dir", default=cfg["index_dir"])
     feat_p.add_argument("--json", action="store_true")
     feat_p.add_argument("--skip-failed", action="store_true", help="leave unparseable files out")
+    feat_p.add_argument("--tolerant", action="store_true", help="recover functions from files that do not parse (needs tree-sitter)")
     feat_p.add_argument("--rebuild", action="store_true", help="force an index rebuild first")
     return parser
 
@@ -202,17 +208,17 @@ def _features_command(args) -> int:
         width = max((len(u.unit_id) for u, _ in pairs), default=4)
         print(f"{'unit':<{width}}  " + " ".join(f"{label:>5}" for label, _ in TABLE_COLUMNS))
         for unit, rec in pairs:
-            if rec.parse_status != "ok":
-                print(f"{unit.unit_id:<{width}}  (file did not parse: no AST features)")
+            if rec.parse_status not in PARSEABLE:
+                print(f"{unit.unit_id:<{width}}  (did not parse: no AST features)")
                 continue
             cells = " ".join(f"{int(rec.features[name]):>5}" for _, name in TABLE_COLUMNS)
-            print(f"{unit.unit_id:<{width}}  {cells}")
+            print(f"{unit.unit_id:<{width}}  {cells}{status_flag(unit)}")
         return 0
 
     for unit, rec in pairs[:10]:
-        print(f"{unit.unit_id}  [{unit.start_line}-{unit.end_line}]")
-        if rec.parse_status != "ok":
-            print("  file did not parse: no AST features")
+        print(f"{unit.unit_id}  [{unit.start_line}-{unit.end_line}]{status_flag(unit)}")
+        if rec.parse_status not in PARSEABLE:
+            print("  did not parse: no AST features")
             continue
         for name in FEATURE_NAMES:
             if rec.features.get(name):
@@ -235,6 +241,7 @@ def _load(args, corpus: str):
         args.index_dir,
         include_failed=not args.skip_failed,
         rebuild=args.rebuild,
+        tolerant=getattr(args, "tolerant", False),
     )
     if reason:
         _err(f"index built ({reason}): {len(units)} units -> {args.index_dir}")
@@ -269,6 +276,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     except EmbeddingError as exc:
         _err(f"error: {exc}")
         return 3
+    except TolerantUnavailable as exc:
+        _err(f"error: {exc}")
+        return 2
 
 
 def _experiment_command(args, cfg) -> int:
@@ -346,9 +356,9 @@ def _fragments_command(args) -> int:
             t: n for t, n in r.terms.items() if args.kind in (None, t.split(":", 1)[0])}} for u, r in chosen], indent=2))
         return 0
     for unit, rec in chosen:
-        print(f"{unit.unit_id}  [{unit.start_line}-{unit.end_line}]")
-        if rec.parse_status != "ok":
-            print("  file did not parse: no fragments")
+        print(f"{unit.unit_id}  [{unit.start_line}-{unit.end_line}]{status_flag(unit)}")
+        if rec.parse_status not in PARSEABLE:
+            print("  did not parse: no fragments")
             continue
         for kind in ("ord", "ad", "ch3", "pc", "u"):
             if args.kind not in (None, kind):
@@ -398,6 +408,7 @@ def _run(args, cfg) -> int:
         corpus=args.corpus,
         index_dir=args.index_dir,
         skip_failed=args.skip_failed,
+        tolerant=args.tolerant,
         rebuild=args.rebuild,
         query_id=args.query_id,
         embedder=args.embedder,

@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional
 
 PARSE_OK = "ok"
 PARSE_FAILED = "failed"
+PARSE_PARTIAL = "partial"  # function cut from a file that did not parse; syntax-error lines skipped (Step 9)
+PARSEABLE = (PARSE_OK, PARSE_PARTIAL)  # statuses that carry AST evidence
 
 
 class _Record:
@@ -33,6 +35,17 @@ class CodeUnit(_Record):
     source_text: str
     language: str = "python"
     parse_status: str = PARSE_OK
+    error_lines: List[int] = field(default_factory=list)  # 1-based file lines of syntax errors (partial/failed units)
+
+
+def status_flag(unit: "CodeUnit") -> str:
+    """Short suffix for listings: empty for normal units, a note for partial/failed ones."""
+    if unit.parse_status == PARSE_OK:
+        return ""
+    if unit.parse_status == PARSE_PARTIAL:
+        shown = ", ".join(str(n) for n in unit.error_lines[:5]) + (" ..." if len(unit.error_lines) > 5 else "")
+        return f"  [partial parse: syntax errors at line {shown}]" if shown else "  [partial parse]"
+    return "  [parse failed]"
 
 
 @dataclass

@@ -68,6 +68,7 @@ def template_explanation(result: RankedResult, unit: CodeUnit) -> Explanation:
     shared: List[str] = []
     breakdown: Optional[str] = None
     parse_note: Optional[str] = None
+    partial_note: Optional[str] = None
     cited: List[int] = []
 
     for number, line in enumerate(result.evidence, 1):
@@ -88,7 +89,9 @@ def template_explanation(result: RankedResult, unit: CodeUnit) -> Explanation:
             shared.append(rest)
         elif (rest := _split(line, "fusion: ")) is not None:
             breakdown = rest
-        elif line.startswith("file did not parse"):
+        elif line.startswith("partial parse"):
+            partial_note = line
+        elif line.startswith(("file did not parse", "function did not parse")):
             parse_note = line
         else:
             continue
@@ -110,8 +113,10 @@ def template_explanation(result: RankedResult, unit: CodeUnit) -> Explanation:
         points.append(f"Has the same structure as the example: {'; '.join(shared)}.")
     if breakdown:
         points.append(f"Score breakdown: {breakdown}.")
+    if partial_note:
+        points.append("Part of this function has syntax errors and was skipped; the structural evidence covers the rest.")
     if parse_note:
-        points.append("The file does not parse, so this is a whole-file text match with no structural evidence.")
+        points.append("The code does not parse, so this is a text match with no structural evidence.")
 
     head = f"{unit.unit_id} (lines {unit.start_line}-{unit.end_line})"
     if not points:

@@ -13,7 +13,8 @@ from typing import Dict, List, Mapping, Optional, Sequence
 
 from structsearch.indexing.bm25 import _BM25
 from structsearch.ingestion.corpus import FailedFile
-from structsearch.parsing.fragments import PARSE_OK, FragmentRecord, describe_term, split_term
+from structsearch.schemas import PARSEABLE
+from structsearch.parsing.fragments import FragmentRecord, describe_term, split_term
 from structsearch.retrieval.baseline import parse_failure_evidence
 from structsearch.schemas import CodeUnit, RankedResult
 
@@ -29,7 +30,7 @@ class FragmentIndex:
     """BM25 over fragment terms. Built from FragmentRecords (cheap; nothing is pickled)."""
 
     def __init__(self, records: Sequence[FragmentRecord]):
-        self.records = [r for r in records if r.parse_status == PARSE_OK and r.terms]
+        self.records = [r for r in records if r.parse_status in PARSEABLE and r.terms]
         corpus = [[t for t, n in r.terms.items() for _ in range(max(n, 1))] for r in self.records]
         self._bm25 = _BM25(corpus, k1=K1, b=B) if corpus else None
         self._sets = [set(r.terms) for r in self.records]

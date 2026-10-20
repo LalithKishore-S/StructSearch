@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
-from structsearch.schemas import CodeUnit, RankedResult
+from structsearch.schemas import CodeUnit, RankedResult, status_flag
 
 MAX_LINE_WIDTH = 110
 
@@ -36,7 +36,7 @@ def format_results(
     out = [header, ""]
     for rank, res in enumerate(results, 1):
         unit = units_by_id[res.unit_id]
-        flag = "  [parse failed]" if unit.parse_status != "ok" else ""
+        flag = status_flag(unit)
         out.append(f"{rank:>2}. {res.unit_id}   score {res.final_score:.3f}{flag}")
         out.append(f"    {unit.file_path}:{unit.start_line}-{unit.end_line}")
         for item in res.evidence:

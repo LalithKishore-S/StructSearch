@@ -14,6 +14,11 @@ def parse_failure_evidence(
     """Evidence line for units from files that did not parse (None for normal units)."""
     if unit.parse_status == "ok":
         return None
+    if unit.parse_status == "partial":
+        lines = ", ".join(str(n) for n in unit.error_lines) or "unknown"
+        return f"partial parse: syntax errors at line {lines} were skipped; structural evidence covers the rest"
+    if not unit.unit_id.endswith("::<module>"):  # a function recovered by --tolerant that could not be repaired
+        return "function did not parse; text match only, no AST evidence"
     failure = (failed_by_path or {}).get(unit.file_path)
     detail = f" - {failure.error}" if failure else ""
     return f"file did not parse{detail}; whole-file match only, no AST evidence"
