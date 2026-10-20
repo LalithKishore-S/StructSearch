@@ -1,6 +1,7 @@
 from structsearch.ingestion.corpus import (
     FailedFile,
     IngestResult,
+    corpus_signature,
     fingerprint_units,
     ingest_corpus,
     load_failed,
@@ -13,6 +14,7 @@ from structsearch.ingestion.segmenter import make_file_unit, parse_unit, split_s
 __all__ = [
     "FailedFile",
     "IngestResult",
+    "corpus_signature",
     "fingerprint_units",
     "ingest_corpus",
     "load_failed",

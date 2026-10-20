@@ -104,6 +104,24 @@ def fingerprint_units(units: Iterable[CodeUnit]) -> str:
     return digest.hexdigest()
 
 
+def corpus_signature(root: Union[str, Path]) -> str:
+    """Cheap fingerprint of the corpus on disk (relative paths, sizes, mtimes).
+
+    Used to notice that source files changed since the index was built without
+    re-parsing everything on every search.
+    """
+    root = Path(root).resolve()
+    base = root.parent if root.is_file() else root
+    digest = hashlib.sha256()
+    for path in _iter_py_files(root):
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        digest.update(f"{path.relative_to(base).as_posix()}\0{stat.st_size}\0{stat.st_mtime_ns}\n".encode())
+    return digest.hexdigest()
+
+
 def save_units(units: Iterable[CodeUnit], path: Union[str, Path]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
