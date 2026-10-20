@@ -1,0 +1,21 @@
+{
+  "_note": "Expected unit ids for the fixture corpus (functions and methods, including nested class methods). broken_syntax.py must yield none.",
+  "units": [
+    "db.py::count_rows",
+    "db.py::find_user_unsafe",
+    "db.py::get_user",
+    "db.py::validate_user_input",
+    "files.py::read_config_safe",
+    "files.py::read_lines",
+    "files.py::write_log",
+    "trees.py::Node.__init__",
+    "trees.py::count_nodes",
+    "trees.py::factorial",
+    "trees.py::inorder_traverse",
+    "utils.py::Counter.increment",
+    "utils.py::add",
+    "utils.py::camel_to_snake",
+    "utils.py::slugify"
+  ],
+  "unparseable_files": ["broken_syntax.py"]
+}

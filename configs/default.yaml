@@ -1,0 +1,20 @@
+# StructSearch default configuration.
+# Tune weights on dev queries only. A missing graph score is handled by
+# renormalizing the remaining weights (implemented in Step 6).
+corpus_path: tests/fixtures/sample_corpus
+index_dir: .structsearch_index
+top_k: 10
+
+weights:
+  text: 0.6
+  structural: 0.3
+  graph: 0.1
+
+# Optional local LLM (off by default; every LLM path has a rule-based fallback).
+llm:
+  enabled: false
+  backend: ollama
+  host: http://localhost:11434
+  model: qwen2.5-coder:7b
+  fallback_model: qwen2.5-coder:3b
+  timeout_seconds: 60
