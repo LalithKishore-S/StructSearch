@@ -1,5 +1,5 @@
 {
-  "_note": "Expected unit ids for the fixture corpus (functions and methods, including nested class methods). broken_syntax.py must yield none.",
+  "_note": "Expected unit ids for the fixture corpus. 'units' are functions and methods; unparseable files are kept as one file-level unit each (parse_status=failed) listed in 'failed_units'.",
   "units": [
     "db.py::count_rows",
     "db.py::find_user_unsafe",
@@ -17,5 +17,6 @@
     "utils.py::camel_to_snake",
     "utils.py::slugify"
   ],
-  "unparseable_files": ["broken_syntax.py"]
+  "unparseable_files": ["broken_syntax.py"],
+  "failed_units": ["broken_syntax.py::<module>"]
 }

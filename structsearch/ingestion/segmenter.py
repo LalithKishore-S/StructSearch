@@ -9,14 +9,17 @@ Design decisions
 - start_line includes decorators. Lines are 1-based and match the original file.
 - source_text is the exact slice of the file, not dedented. Use parse_unit() to
   get an AST node from it.
+- A file that cannot be parsed becomes ONE file-level unit (make_file_unit) with
+  parse_status='failed', so it stays searchable by text. It has no AST evidence.
 """
 from __future__ import annotations
 
 import ast
 import re
+from pathlib import PurePosixPath
 from typing import List, Tuple
 
-from structsearch.schemas import PARSE_OK, CodeUnit
+from structsearch.schemas import PARSE_FAILED, PARSE_OK, CodeUnit
 
 _FUNC = (ast.FunctionDef, ast.AsyncFunctionDef)
 _NEWLINE = re.compile(r"\r\n|\r|\n")
@@ -69,6 +72,23 @@ def split_source(source: str, rel_path: str) -> List[CodeUnit]:
             )
         )
     return units
+
+
+def make_file_unit(source: str, rel_path: str) -> CodeUnit:
+    """Whole-file unit for a file that could not be parsed (parse_status='failed')."""
+    lines = _NEWLINE.split(source)
+    if len(lines) > 1 and lines[-1] == "":
+        lines.pop()  # trailing newline is not an extra line
+    return CodeUnit(
+        unit_id=f"{rel_path}::<module>",
+        file_path=rel_path,
+        start_line=1,
+        end_line=len(lines),
+        name=PurePosixPath(rel_path).stem,
+        source_text="\n".join(lines),
+        language="python",
+        parse_status=PARSE_FAILED,
+    )
 
 
 def parse_unit(unit: CodeUnit) -> ast.AST:

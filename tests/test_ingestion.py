@@ -3,9 +3,12 @@ import re
 from pathlib import Path
 
 from structsearch.ingestion import (
+    fingerprint_units,
     ingest_corpus,
+    load_failed,
     load_units,
     parse_unit,
+    save_failed,
     save_units,
     split_source,
 )
@@ -24,10 +27,29 @@ def _ids(source, path="m.py"):
 def test_fixture_units_match_manifest():
     manifest = json.loads((FIXTURES / "expected_units.json").read_text())
     result = ingest_corpus(CORPUS)
-    assert sorted(u.unit_id for u in result.units) == sorted(manifest["units"])
+    expected = manifest["units"] + manifest["failed_units"]
+    assert sorted(u.unit_id for u in result.units) == sorted(expected)
     assert result.files_scanned == 5
-    assert [rel for rel, _ in result.failed_files] == manifest["unparseable_files"]
-    assert "SyntaxError" in result.failed_files[0][1]
+    assert [f.rel_path for f in result.failed_files] == manifest["unparseable_files"]
+    assert "SyntaxError" in result.failed_files[0].error
+    # The exact line depends on the Python version (3.13 reports 1, older versions 2).
+    assert result.failed_files[0].line in (1, 2)
+
+
+def test_skip_failed_keeps_only_function_units():
+    manifest = json.loads((FIXTURES / "expected_units.json").read_text())
+    result = ingest_corpus(CORPUS, include_failed=False)
+    assert sorted(u.unit_id for u in result.units) == sorted(manifest["units"])
+    assert len(result.failed_files) == 1
+
+
+def test_failed_file_becomes_file_level_unit():
+    units = {u.unit_id: u for u in ingest_corpus(CORPUS).units}
+    unit = units["broken_syntax.py::<module>"]
+    assert unit.parse_status == "failed" and unit.language == "python"
+    assert unit.name == "broken_syntax"
+    assert (unit.start_line, unit.end_line) == (1, 2)
+    assert unit.source_text == "def broken_function(x:\n    return x +"
 
 
 def test_unit_ids_unique_and_deterministic():
@@ -55,9 +77,10 @@ def test_source_text_is_exact_file_slice():
         assert unit.source_text == "\n".join(lines[unit.start_line - 1 : unit.end_line])
 
 
-def test_all_units_ok_and_python():
+def test_function_units_ok_and_python():
     for unit in ingest_corpus(CORPUS).units:
-        assert unit.parse_status == "ok" and unit.language == "python"
+        expected = "failed" if unit.unit_id.endswith("::<module>") else "ok"
+        assert unit.parse_status == expected and unit.language == "python"
 
 
 def test_parse_unit_handles_methods_and_functions():
@@ -150,9 +173,19 @@ def test_unparseable_and_bad_encoding_files_are_not_fatal(tmp_path):
     (tmp_path / "bad_syntax.py").write_text("def (:\n")
     (tmp_path / "bad_bytes.py").write_bytes(b"def f():\n    return '\xff\xfe'\n")
     result = ingest_corpus(tmp_path)
-    assert [u.unit_id for u in result.units] == ["good.py::ok"]
-    assert sorted(rel for rel, _ in result.failed_files) == ["bad_bytes.py", "bad_syntax.py"]
+    assert [u.unit_id for u in result.units] == [
+        "bad_bytes.py::<module>",
+        "bad_syntax.py::<module>",
+        "good.py::ok",
+    ]
+    status = {u.unit_id: u.parse_status for u in result.units}
+    assert status["good.py::ok"] == "ok"
+    assert status["bad_bytes.py::<module>"] == "failed"
+    assert status["bad_syntax.py::<module>"] == "failed"
+    assert sorted(f.rel_path for f in result.failed_files) == ["bad_bytes.py", "bad_syntax.py"]
     assert result.files_scanned == 3
+    only_good = ingest_corpus(tmp_path, include_failed=False)
+    assert [u.unit_id for u in only_good.units] == ["good.py::ok"]
 
 
 def test_encoding_cookie_is_respected(tmp_path):
@@ -193,6 +226,30 @@ def test_cli_writes_units_and_reports(tmp_path, capsys):
     out = tmp_path / "units.jsonl"
     assert main([str(CORPUS), "--out", str(out)]) == 0
     text = capsys.readouterr().out
-    assert re.search(r"units\s+: 15", text)
+    assert re.search(r"units\s+: 16", text)
     assert re.search(r"failed files\s+: 1", text)
+    assert re.search(r"broken_syntax\.py \(line \d+\)", text)
+    assert len(load_units(out)) == 16
+    failed = load_failed(tmp_path / "failed_files.json")
+    assert [f.rel_path for f in failed] == ["broken_syntax.py"]
+
+
+def test_cli_skip_failed(tmp_path):
+    out = tmp_path / "units.jsonl"
+    assert main([str(CORPUS), "--out", str(out), "--skip-failed"]) == 0
     assert len(load_units(out)) == 15
+
+
+def test_failed_files_roundtrip(tmp_path):
+    failed = ingest_corpus(CORPUS).failed_files
+    save_failed(failed, tmp_path / "f.json")
+    assert load_failed(tmp_path / "f.json") == failed
+    assert load_failed(tmp_path / "missing.json") == []
+
+
+def test_fingerprint_changes_with_source_and_ignores_order():
+    units = ingest_corpus(CORPUS).units
+    same = fingerprint_units(reversed(units))
+    assert same == fingerprint_units(units)
+    units[0].source_text += "\n# edit"
+    assert fingerprint_units(units) != same

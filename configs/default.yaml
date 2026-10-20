@@ -10,6 +10,16 @@ weights:
   structural: 0.3
   graph: 0.1
 
+# BM25 text index (Step 2). Field weights multiply each field's BM25 score.
+bm25:
+  k1: 1.5
+  b: 0.75
+  field_weights:
+    name: 3.0
+    identifiers: 2.0
+    doc: 1.5
+    code: 1.0
+
 # Optional local LLM (off by default; every LLM path has a rule-based fallback).
 llm:
   enabled: false

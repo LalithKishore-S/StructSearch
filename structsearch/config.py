@@ -29,3 +29,12 @@ def validate_config(cfg: Dict[str, Any]) -> None:
         raise ValueError("weights must not all be zero")
     if int(cfg.get("top_k", 0)) < 1:
         raise ValueError("top_k must be >= 1")
+    bm25 = cfg.get("bm25")
+    if bm25 is not None:
+        if bm25.get("k1", 1.5) <= 0:
+            raise ValueError("bm25.k1 must be > 0")
+        if not 0 <= bm25.get("b", 0.75) <= 1:
+            raise ValueError("bm25.b must be between 0 and 1")
+        for name, weight in bm25.get("field_weights", {}).items():
+            if weight < 0:
+                raise ValueError(f"negative bm25 field weight: {name}")
