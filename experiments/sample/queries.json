@@ -1,0 +1,8 @@
+[
+  {"query_id": "d1", "query": "recursive factorial", "category": "lexical", "split": "dev"},
+  {"query_id": "d2", "query": "convert camel case name to snake case", "category": "lexical", "split": "dev"},
+  {"query_id": "d3", "query": "sql query built by string concatenation", "category": "relationship", "split": "dev"},
+  {"query_id": "d4", "query": "function that opens a file without closing it", "category": "relationship", "split": "dev"},
+  {"query_id": "t1", "query": "count nodes in a tree", "category": "lexical", "split": "test"},
+  {"query_id": "t2", "query": "read a config file safely", "category": "relationship", "split": "test"}
+]

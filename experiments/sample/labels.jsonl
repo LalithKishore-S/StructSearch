@@ -1,0 +1,6 @@
+{"query_id":"d1","unit_id":"trees.py::factorial","relevance":1,"query_category":"lexical","split":"dev"}
+{"query_id":"d2","unit_id":"utils.py::camel_to_snake","relevance":1,"query_category":"lexical","split":"dev"}
+{"query_id":"d3","unit_id":"db.py::find_user_unsafe","relevance":1,"query_category":"relationship","split":"dev"}
+{"query_id":"d4","unit_id":"files.py::read_lines","relevance":1,"query_category":"relationship","split":"dev"}
+{"query_id":"t1","unit_id":"trees.py::count_nodes","relevance":1,"query_category":"lexical","split":"test"}
+{"query_id":"t2","unit_id":"files.py::read_config_safe","relevance":1,"query_category":"relationship","split":"test"}

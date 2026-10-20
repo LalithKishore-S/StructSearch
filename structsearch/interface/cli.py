@@ -130,6 +130,20 @@ def _build_parser(cfg) -> argparse.ArgumentParser:
     )
     search_p.add_argument("--explain-top", type=int, default=3, help="with --explain llm: results sent to the model")
 
+    exp_p = sub.add_parser("experiment", help="run variants over labelled queries and write result tables")
+    exp_p.add_argument("--queries", required=True, help="queries file (json/jsonl/csv)")
+    exp_p.add_argument("--labels", required=True, help="labels file (json/jsonl/csv)")
+    exp_p.add_argument("--variants", default="bm25,dense,text_ast,hybrid", help="comma list, e.g. bm25,text_ast,text_ast+llm")
+    exp_p.add_argument("--out", default="results")
+    exp_p.add_argument("-k", type=int, default=cfg["top_k"])
+    exp_p.add_argument("--corpus", default=cfg["corpus_path"])
+    exp_p.add_argument("--index-dir", default=cfg["index_dir"])
+    exp_p.add_argument("--final", action="store_true", help="also run the test split (do this once, after tuning on dev)")
+    exp_p.add_argument("--tune", choices=("text_ast", "hybrid"), default=None, help="grid-search fusion weights on dev only")
+    exp_p.add_argument("--step", type=float, default=0.25, help="grid step for --tune")
+    _add_dense_args(exp_p)
+    _add_llm_args(exp_p)
+
     prof_p = sub.add_parser("profile", help="show the structural constraints a query maps to")
     prof_p.add_argument("query")
     prof_p.add_argument("--json", action="store_true")
@@ -257,6 +271,37 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 3
 
 
+def _experiment_command(args, cfg) -> int:
+    from structsearch.experiments.runner import (
+        load_labels, load_queries, parse_variant, run_experiment, tune_weights, write_results,
+    )
+
+    try:
+        queries, labels = load_queries(args.queries), load_labels(args.labels)
+        variants = [v.strip() for v in args.variants.split(",") if v.strip()]
+        for v in variants:
+            parse_variant(v)
+        splits = ("dev", "test") if args.final else ("dev",)
+        if args.tune:
+            rows = tune_weights(queries, labels, args.tune, cfg, args.corpus, args.index_dir, args.k, args.step, args.embedder)
+            print(f"weights tuned on dev only ({args.tune}); best first:")
+            for row in rows[:5]:
+                print(f"  {row['weights']}  nDCG@k={row['nDCG@k']:.3f} MRR={row['MRR']:.3f} (n={row['n']})")
+            return 0
+        result = run_experiment(queries, labels, variants, cfg, args.corpus, args.index_dir, args.k, splits,
+                                llm=_llm_settings(args, cfg), embedder=args.embedder)
+    except (OSError, ValueError, KeyError, SearchError) as exc:
+        _err(f"error: {exc}")
+        return getattr(exc, "code", 2)
+    except EmbeddingError as exc:
+        _err(f"error: {exc}")
+        return 3
+    files = write_results(result, Path(args.out), args.k)
+    print((Path(args.out) / "results.md").read_text(encoding="utf-8"))
+    print("wrote: " + ", ".join(str(f) for f in files))
+    return 0
+
+
 def _profile_for(args, cfg):
     """Profile from the query plus any --pattern flags. Raises SearchError for a bad flag."""
     return make_profile(args.query, _llm_settings(args, cfg), getattr(args, "pattern", []), _err)
@@ -321,6 +366,8 @@ def _fragments_command(args) -> int:
 def _run(args, cfg) -> int:
     if args.command == "features":
         return _features_command(args)
+    if args.command == "experiment":
+        return _experiment_command(args, cfg)
     if args.command == "profile":
         return _profile_command(args, cfg)
     if args.command == "fragments":
