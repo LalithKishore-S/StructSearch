@@ -1,7 +1,7 @@
 """Render ranked results as readable text or JSON (ASCII only, safe for any terminal)."""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Mapping, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from structsearch.schemas import CodeUnit, RankedResult
 
@@ -28,6 +28,7 @@ def format_results(
     total_units: int,
     max_lines: int = 8,
     mode: str = "bm25",
+    explanations: Optional[Mapping[str, Any]] = None,
 ) -> str:
     header = f'Query: "{query}"   mode: {mode}   {len(results)} result(s) from {total_units} units'
     if not results:
@@ -40,6 +41,10 @@ def format_results(
         out.append(f"    {unit.file_path}:{unit.start_line}-{unit.end_line}")
         for item in res.evidence:
             out.append(f"    - {item}")
+        explanation = (explanations or {}).get(res.unit_id)
+        if explanation is not None:
+            tag = "" if explanation.source == "template" else f"  [{explanation.source}, cites {explanation.cited}]"
+            out.append(f"    why: {_clip(explanation.summary)}{tag}")
         numbered, hidden = excerpt_lines(unit, max_lines)
         width = len(str(unit.end_line))
         for lineno, text in numbered:
@@ -51,7 +56,7 @@ def format_results(
 
 
 def result_to_dict(
-    res: RankedResult, unit: CodeUnit, max_lines: int = 8
+    res: RankedResult, unit: CodeUnit, max_lines: int = 8, explanation: Any = None
 ) -> Dict[str, Any]:
     numbered, hidden = excerpt_lines(unit, max_lines)
     data = res.to_dict()
@@ -66,4 +71,6 @@ def result_to_dict(
             "excerpt_truncated_lines": hidden,
         }
     )
+    if explanation is not None:
+        data["explanation"] = explanation.to_dict()
     return data

@@ -26,11 +26,18 @@ from typing import Callable, List, Optional
 
 from structsearch.config import load_config
 from structsearch.indexing.builder import FAILED_FILE, ensure_index
-from structsearch.indexing.dense import ensure_dense_index
-from structsearch.indexing.embedder import DenseSettings, EmbeddingError, make_embedder
-from structsearch.indexing.tokenizer import tokenize_query
+from structsearch.indexing.embedder import EmbeddingError
 from structsearch.ingestion.corpus import load_failed
+from structsearch.interface.explain import explain_results
 from structsearch.interface.format import format_results, result_to_dict
+from structsearch.interface.service import (
+    MODES,
+    SearchError,
+    SearchRequest,
+    make_profile,
+    prepare_dense,
+    run_search,
+)
 from structsearch.llm import LLMSettings
 from structsearch.parsing import (
     FEATURE_NAMES,
@@ -38,17 +45,7 @@ from structsearch.parsing import (
     ensure_ast_records,
     ensure_fragment_records,
     node_type_counts,
-    snippet_terms,
 )
-from structsearch.retrieval.baseline import bm25_search
-from structsearch.retrieval.dense import dense_search
-from structsearch.retrieval.fusion import SIGNALS, fused_search
-from structsearch.retrieval.like import FragmentIndex, like_search
-from structsearch.retrieval.patterns import PatternError, parse_pattern
-from structsearch.retrieval.structural import build_profile, structural_search
-
-MODES = ("bm25", "dense", "structural", "like", "text_ast", "hybrid")
-FUSED_MODES = ("text_ast", "hybrid")
 
 
 def _err(message: str) -> None:
@@ -122,6 +119,16 @@ def _build_parser(cfg) -> argparse.ArgumentParser:
         metavar="SIGNAL=VALUE",
         help="override a fusion weight for text_ast/hybrid, e.g. --weight structural=0.5 (repeatable)",
     )
+
+    search_p.add_argument(
+        "--explain",
+        nargs="?",
+        const="template",
+        choices=("template", "llm"),
+        default=None,
+        help="add a 'why' line per result: template (default, no Ollama) or llm (Ollama, validated, falls back to template)",
+    )
+    search_p.add_argument("--explain-top", type=int, default=3, help="with --explain llm: results sent to the model")
 
     prof_p = sub.add_parser("profile", help="show the structural constraints a query maps to")
     prof_p.add_argument("query")
@@ -233,17 +240,10 @@ def _progress_printer() -> Callable[[int, int], None]:
 
 
 def _dense(args, cfg, units):
-    """Return (dense_index, embedder, settings), building or refreshing the dense index."""
-    settings = DenseSettings.from_config(cfg, backend=args.embedder, model=args.model)
-    embedder = make_embedder(settings)
-    if settings.backend == "hashing":
-        _err("note: the hashing embedder is lexical, not semantic (tests and offline demos only)")
-    index, reason = ensure_dense_index(
-        units, args.index_dir, embedder, settings, rebuild=args.rebuild, progress=_progress_printer()
+    """Used by the index command: (dense_index, embedder, settings), building or refreshing the index."""
+    return prepare_dense(
+        cfg, units, args.index_dir, args.embedder, args.model, args.rebuild, _err, _progress_printer()
     )
-    if reason:
-        _err(f"dense index built ({reason}): {len(index.unit_ids)} units, {index.dim} dims, model {index.model}")
-    return index, embedder, settings
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -258,52 +258,16 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 def _profile_for(args, cfg):
-    """Profile from the query plus any --pattern flags. Raises PatternError for a bad flag."""
-    explicit = [parse_pattern(text) for text in getattr(args, "pattern", [])]
-    profile = build_profile(args.query, _llm_settings(args, cfg)).with_relations(explicit)
-    if profile.fallback_reason:
-        _err(f"note: {profile.fallback_reason}")
-    return profile
-
-
-def _structure_inputs(args, cfg, units):
-    """(profile, ast records, fragment records or None); raises PatternError for a bad --pattern."""
-    profile = _profile_for(args, cfg)
-    records, reason = ensure_ast_records(units, args.index_dir)
-    if reason:
-        _err(f"AST features extracted ({reason}): {len(records)} units")
-    fragments = None
-    if profile.relations:
-        fragments, reason = ensure_fragment_records(units, args.index_dir)
-        if reason:
-            _err(f"fragments extracted ({reason}): {len(fragments)} units")
-    return profile, records, fragments
-
-
-def _fusion_weights(args, cfg):
-    """Config weights for the mode with --weight overrides applied. Raises ValueError for bad input."""
-    weights = dict(cfg["hybrid_weights"] if args.mode == "hybrid" else cfg["weights"])
-    for item in args.weight:
-        name, sep, raw = item.partition("=")
-        name = name.strip()
-        if not sep or name not in SIGNALS:
-            raise ValueError(f"--weight must look like SIGNAL=VALUE with SIGNAL one of {', '.join(SIGNALS)}: '{item}'")
-        try:
-            value = float(raw)
-        except ValueError:
-            raise ValueError(f"--weight {name}: '{raw}' is not a number") from None
-        if not value >= 0 or value == float("inf"):
-            raise ValueError(f"--weight {name} must be a finite number >= 0")
-        weights[name] = value
-    return weights
+    """Profile from the query plus any --pattern flags. Raises SearchError for a bad flag."""
+    return make_profile(args.query, _llm_settings(args, cfg), getattr(args, "pattern", []), _err)
 
 
 def _profile_command(args, cfg) -> int:
     try:
         profile = _profile_for(args, cfg)
-    except PatternError as exc:
-        _err(f"error: bad --pattern: {exc}")
-        return 2
+    except SearchError as exc:
+        _err(f"error: {exc}")
+        return exc.code
     if args.json:
         print(json.dumps({"query": args.query, **profile.to_dict()}, indent=2))
         return 0
@@ -380,93 +344,52 @@ def _run(args, cfg) -> int:
         return 0
 
     # search
-    if args.k < 1:
-        _err("error: -k must be at least 1")
-        return 2
-    loaded = _load(args, args.corpus)
-    if loaded is None:
-        return 2
-    units, bm25_index = loaded
-    units_by_id = {u.unit_id: u for u in units}
-    failed_by_path = {f.rel_path: f for f in load_failed(Path(args.index_dir) / FAILED_FILE)}
+    request = SearchRequest(
+        query=args.query,
+        mode=args.mode,
+        k=args.k,
+        corpus=args.corpus,
+        index_dir=args.index_dir,
+        skip_failed=args.skip_failed,
+        rebuild=args.rebuild,
+        query_id=args.query_id,
+        embedder=args.embedder,
+        model=args.model,
+        llm=_llm_settings(args, cfg),
+        patterns=list(args.pattern),
+        weights=list(args.weight),
+    )
+    try:
+        response = run_search(request, cfg, notify=_err, progress=_progress_printer())
+    except SearchError as exc:
+        _err(f"error: {exc}")
+        return exc.code
 
-    extra = {}
-    if args.mode == "structural":
-        try:
-            profile, records, fragments = _structure_inputs(args, cfg, units)
-        except PatternError as exc:
-            _err(f"error: bad --pattern: {exc}")
-            return 2
-        if profile.is_empty:
-            _err("note: no structural requirements found in the query; nothing to rank (try --mode bm25)")
-        results = structural_search(profile, units_by_id, records, args.k, args.query_id, failed_by_path, fragments)
-        extra["profile"] = profile.to_dict()
-        _err(f"structural profile ({profile.source}): {profile.describe()}")
-    elif args.mode in FUSED_MODES:
-        try:
-            profile, records, fragments = _structure_inputs(args, cfg, units)
-            weights = _fusion_weights(args, cfg)
-        except PatternError as exc:
-            _err(f"error: bad --pattern: {exc}")
-            return 2
-        except ValueError as exc:
-            _err(f"error: {exc}")
-            return 2
-        dense = _dense(args, cfg, units) if args.mode == "hybrid" else None
-        if not tokenize_query(args.query):
-            _err("note: the query has no searchable terms after removing stopwords")
-        outcome = fused_search(
-            args.query, units_by_id, bm25_index, weights, args.k, args.query_id, failed_by_path,
-            profile=profile, ast_records=records, fragments=fragments, dense=dense,
+    units_by_id, results = response.units_by_id, response.results
+    explanations = None
+    if args.explain:
+        explanations = explain_results(
+            args.query,
+            results,
+            units_by_id,
+            method=args.explain,
+            llm=_llm_settings(args, cfg) if args.explain == "llm" else None,
+            top=args.explain_top,
+            notify=_err,
         )
-        results = outcome.results
-        if profile.is_empty:
-            _err("note: no structural requirements found in the query; ranking without the structure signal")
-        else:
-            _err(f"structural profile ({profile.source}): {profile.describe()}")
-        _err("fusion signals: " + ", ".join(f"{n} {w:.2f}" for n, w in outcome.weights.items()))
-        extra["profile"] = profile.to_dict()
-        extra["fusion"] = {"signals": outcome.active, "weights": {n: round(w, 6) for n, w in outcome.weights.items()}}
-        if dense is not None:
-            extra["embedding_model"] = dense[0].model
-    elif args.mode == "like":
-        snippet = args.query
-        if snippet.startswith("@"):
-            try:
-                snippet = Path(snippet[1:]).read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError) as exc:
-                _err(f"error: cannot read snippet file {snippet[1:]}: {exc}")
-                return 2
-        try:
-            wanted = snippet_terms(snippet)
-        except ValueError as exc:
-            _err(f"error: {exc}")
-            return 2
-        fragments, reason = ensure_fragment_records(units, args.index_dir)
-        if reason:
-            _err(f"fragments extracted ({reason}): {len(fragments)} units")
-        results = like_search(FragmentIndex(fragments), units_by_id, wanted, args.k, args.query_id, failed_by_path)
-    elif args.mode == "dense":
-        dense_index, embedder, settings = _dense(args, cfg, units)
-        results = dense_search(
-            dense_index, embedder, settings, units_by_id, args.query, args.k, args.query_id, failed_by_path
-        )
-        extra["embedding_model"] = dense_index.model
-    else:
-        if not tokenize_query(args.query):
-            _err("note: the query has no searchable terms after removing stopwords")
-        results = bm25_search(bm25_index, units_by_id, args.query, args.k, args.query_id, failed_by_path)
-
     if args.json:
         payload = {
             "query": args.query,
             "mode": args.mode,
             "k": args.k,
-            "units_indexed": len(units),
-            **extra,
-            "results": [result_to_dict(r, units_by_id[r.unit_id], args.lines) for r in results],
+            "units_indexed": response.total_units,
+            **response.extra,
+            "results": [
+                result_to_dict(r, units_by_id[r.unit_id], args.lines, (explanations or {}).get(r.unit_id))
+                for r in results
+            ],
         }
         print(json.dumps(payload, indent=2, ensure_ascii=False))
     else:
-        print(format_results(args.query, results, units_by_id, len(units), args.lines, args.mode))
+        print(format_results(args.query, results, units_by_id, response.total_units, args.lines, args.mode, explanations))
     return 0

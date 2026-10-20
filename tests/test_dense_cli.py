@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 import structsearch.interface.cli as cli
+import structsearch.interface.service as service
 from structsearch.config import load_config, validate_config
 from structsearch.indexing import EmbeddingError
 from structsearch.interface.cli import main
@@ -70,7 +71,7 @@ def test_bm25_mode_does_not_touch_embedder(capsys, tmp_path, corpus, monkeypatch
     def boom(*a, **k):
         raise AssertionError("embedder must not be created in bm25 mode")
 
-    monkeypatch.setattr(cli, "make_embedder", boom)
+    monkeypatch.setattr(service, "make_embedder", boom)
     code = main(["search", "read file", "--corpus", str(corpus), "--index-dir", str(tmp_path / "idx")])
     assert code == 0 and "files.py::read_lines" in capsys.readouterr().out
 
@@ -79,7 +80,7 @@ def test_embedding_error_gives_exit_code_3(capsys, tmp_path, corpus, monkeypatch
     def unavailable(settings):
         raise EmbeddingError("Cannot reach Ollama at http://localhost:11434. Start it (ollama serve)")
 
-    monkeypatch.setattr(cli, "make_embedder", unavailable)
+    monkeypatch.setattr(service, "make_embedder", unavailable)
     code = main(["search", "x", "--mode", "dense", "--corpus", str(corpus), "--index-dir", str(tmp_path / "idx")])
     assert code == 3
     assert "ollama serve" in capsys.readouterr().err
