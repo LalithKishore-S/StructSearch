@@ -1,6 +1,6 @@
 # StructSearch default configuration.
-# Tune weights on dev queries only. A missing graph score is handled by
-# renormalizing the remaining weights (implemented in Step 6).
+# Tune weights on dev queries only. Weights of --mode text_ast. A missing signal (no graph score,
+# no structural wording in the query) is dropped and the remaining weights are renormalized (Step 6).
 corpus_path: tests/fixtures/sample_corpus
 index_dir: .structsearch_index
 top_k: 10
@@ -8,6 +8,15 @@ top_k: 10
 weights:
   text: 0.6
   structural: 0.3
+  graph: 0.1
+
+# Weights for --mode hybrid (BM25 + dense + structural [+ graph]). A signal that is missing or carries
+# no information for a query (e.g. a query without structural wording) is dropped and the rest are
+# rescaled to sum to 1, so these are relative importances, not absolute shares.
+hybrid_weights:
+  text: 0.4
+  dense: 0.3
+  structural: 0.2
   graph: 0.1
 
 # BM25 text index (Step 2). Field weights multiply each field's BM25 score.

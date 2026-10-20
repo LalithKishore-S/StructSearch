@@ -5,6 +5,8 @@
   python -m structsearch search "check credentials" --mode dense   semantic search (needs Ollama)
   python -m structsearch features [UNIT]                show the AST features of one unit (or a table of all)
   python -m structsearch search "recursive traversal" --mode structural   AST-constraint search
+  python -m structsearch search "recursive tree traversal" --mode text_ast   BM25 + structure, fused
+  python -m structsearch search "check credentials" --mode hybrid            BM25 + dense + structure, fused
   python -m structsearch search "..." --mode structural --pattern "For//Try"   add an explicit pattern
   python -m structsearch search "@snippet.py" --mode like               structure similar to a code snippet
   python -m structsearch profile "read file without error handling"       show the constraints a query maps to
@@ -40,11 +42,13 @@ from structsearch.parsing import (
 )
 from structsearch.retrieval.baseline import bm25_search
 from structsearch.retrieval.dense import dense_search
+from structsearch.retrieval.fusion import SIGNALS, fused_search
 from structsearch.retrieval.like import FragmentIndex, like_search
 from structsearch.retrieval.patterns import PatternError, parse_pattern
 from structsearch.retrieval.structural import build_profile, structural_search
 
-MODES = ("bm25", "dense", "structural", "like")  # text_ast and hybrid are added in later steps
+MODES = ("bm25", "dense", "structural", "like", "text_ast", "hybrid")
+FUSED_MODES = ("text_ast", "hybrid")
 
 
 def _err(message: str) -> None:
@@ -111,6 +115,13 @@ def _build_parser(cfg) -> argparse.ArgumentParser:
     _add_dense_args(search_p)
     _add_llm_args(search_p)
     _add_pattern_arg(search_p)
+    search_p.add_argument(
+        "--weight",
+        action="append",
+        default=[],
+        metavar="SIGNAL=VALUE",
+        help="override a fusion weight for text_ast/hybrid, e.g. --weight structural=0.5 (repeatable)",
+    )
 
     prof_p = sub.add_parser("profile", help="show the structural constraints a query maps to")
     prof_p.add_argument("query")
@@ -255,6 +266,38 @@ def _profile_for(args, cfg):
     return profile
 
 
+def _structure_inputs(args, cfg, units):
+    """(profile, ast records, fragment records or None); raises PatternError for a bad --pattern."""
+    profile = _profile_for(args, cfg)
+    records, reason = ensure_ast_records(units, args.index_dir)
+    if reason:
+        _err(f"AST features extracted ({reason}): {len(records)} units")
+    fragments = None
+    if profile.relations:
+        fragments, reason = ensure_fragment_records(units, args.index_dir)
+        if reason:
+            _err(f"fragments extracted ({reason}): {len(fragments)} units")
+    return profile, records, fragments
+
+
+def _fusion_weights(args, cfg):
+    """Config weights for the mode with --weight overrides applied. Raises ValueError for bad input."""
+    weights = dict(cfg["hybrid_weights"] if args.mode == "hybrid" else cfg["weights"])
+    for item in args.weight:
+        name, sep, raw = item.partition("=")
+        name = name.strip()
+        if not sep or name not in SIGNALS:
+            raise ValueError(f"--weight must look like SIGNAL=VALUE with SIGNAL one of {', '.join(SIGNALS)}: '{item}'")
+        try:
+            value = float(raw)
+        except ValueError:
+            raise ValueError(f"--weight {name}: '{raw}' is not a number") from None
+        if not value >= 0 or value == float("inf"):
+            raise ValueError(f"--weight {name} must be a finite number >= 0")
+        weights[name] = value
+    return weights
+
+
 def _profile_command(args, cfg) -> int:
     try:
         profile = _profile_for(args, cfg)
@@ -350,23 +393,42 @@ def _run(args, cfg) -> int:
     extra = {}
     if args.mode == "structural":
         try:
-            profile = _profile_for(args, cfg)
+            profile, records, fragments = _structure_inputs(args, cfg, units)
         except PatternError as exc:
             _err(f"error: bad --pattern: {exc}")
             return 2
         if profile.is_empty:
             _err("note: no structural requirements found in the query; nothing to rank (try --mode bm25)")
-        records, reason = ensure_ast_records(units, args.index_dir)
-        if reason:
-            _err(f"AST features extracted ({reason}): {len(records)} units")
-        fragments = None
-        if profile.relations:
-            fragments, reason = ensure_fragment_records(units, args.index_dir)
-            if reason:
-                _err(f"fragments extracted ({reason}): {len(fragments)} units")
         results = structural_search(profile, units_by_id, records, args.k, args.query_id, failed_by_path, fragments)
         extra["profile"] = profile.to_dict()
         _err(f"structural profile ({profile.source}): {profile.describe()}")
+    elif args.mode in FUSED_MODES:
+        try:
+            profile, records, fragments = _structure_inputs(args, cfg, units)
+            weights = _fusion_weights(args, cfg)
+        except PatternError as exc:
+            _err(f"error: bad --pattern: {exc}")
+            return 2
+        except ValueError as exc:
+            _err(f"error: {exc}")
+            return 2
+        dense = _dense(args, cfg, units) if args.mode == "hybrid" else None
+        if not tokenize_query(args.query):
+            _err("note: the query has no searchable terms after removing stopwords")
+        outcome = fused_search(
+            args.query, units_by_id, bm25_index, weights, args.k, args.query_id, failed_by_path,
+            profile=profile, ast_records=records, fragments=fragments, dense=dense,
+        )
+        results = outcome.results
+        if profile.is_empty:
+            _err("note: no structural requirements found in the query; ranking without the structure signal")
+        else:
+            _err(f"structural profile ({profile.source}): {profile.describe()}")
+        _err("fusion signals: " + ", ".join(f"{n} {w:.2f}" for n, w in outcome.weights.items()))
+        extra["profile"] = profile.to_dict()
+        extra["fusion"] = {"signals": outcome.active, "weights": {n: round(w, 6) for n, w in outcome.weights.items()}}
+        if dense is not None:
+            extra["embedding_model"] = dense[0].model
     elif args.mode == "like":
         snippet = args.query
         if snippet.startswith("@"):

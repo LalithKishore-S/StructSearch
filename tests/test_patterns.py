@@ -236,7 +236,7 @@ def pats(query):
         ("try except inside a loop", ["For|While//Try"]),
         ("error handling within each loop", ["For|While//Try"]),
         ("a loop containing a try block", ["For|While//Try"]),
-        ("exception handling inside a for loop", ["For|While//Try"]),
+        ("exception handling inside a for loop", ["For//Try"]),  # "for loop" is more specific than "loop"
         ("read a file without a context manager", ["Call:open and !With//Call:open"]),
         ("unclosed files", ["Call:open and !With//Call:open"]),
         ("opens a file using a with statement", ["With//Call:open"]),
@@ -330,3 +330,52 @@ def test_fallback_keeps_the_rules_patterns():
     assert profile.source == "rules" and profile.fallback_reason and [r.text for r in profile.relations] == [SQL_BUILT_PATTERN]
     empty = build_profile("sql injection", LLMSettings(enabled=True), lambda m: Stub({"constraints": [], "patterns": []}))
     assert empty.source == "rules" and len(empty.relations) == 1
+
+
+# ---- generic "X before / after / inside / containing Y" reading ----
+
+@pytest.mark.parametrize(
+    "query, expected",
+    [
+        ("call before execute", ["Call=>Call:execute|Call:executemany|Call:executescript"]),
+        ("validation before execute", ["If|Assert=>Call:execute|Call:executemany|Call:executescript"]),
+        ("a check prior to the query", ["If|Assert=>Call:execute|Call:executemany|Call:executescript"]),
+        ("execute after string concatenation",
+         ["BinOp:Add|BinOp:Mod|JoinedStr|Call:format=>Call:execute|Call:executemany|Call:executescript"]),
+        ("raise after a return", ["Return=>Raise"]),
+        ("try inside a loop", ["For|While//Try"]),
+        ("loop containing a call", ["For|While//Call"]),
+        ("while loop that contains a try block", ["While//Try"]),
+        ("open within a with statement", ["With//Call:open"]),
+        ("return in each for loop", ["For//Return"]),
+        ("no check before query", ["!If|Assert=>Call:execute|Call:executemany|Call:executescript"]),
+        ("without a call before execute", ["!Call=>Call:execute|Call:executemany|Call:executescript"]),
+    ],
+)
+def test_generic_relational_phrases(query, expected):
+    assert pats(query) == expected
+
+
+def test_generic_reading_ignores_unknown_words_and_unordered_labels():
+    assert pats("banana before execute") == []
+    assert pats("compare before execute") == []  # 'compare' is not in the vocabulary
+    assert pats("before execute") == []
+    assert pats("call before") == []
+
+
+def test_generic_reading_matches_real_functions(corpus):
+    units, records, fragments = corpus
+    profile = rules_profile("call before execute")
+    ids = {r.unit_id for r in structural_search(profile, units, records, k=50, fragments=fragments)}
+    # get_user calls validate_user_input() before db.execute(); the unsafe/count_rows variants only execute
+    assert "db.py::get_user" in ids and "db.py::count_rows" not in ids
+    unsafe = {r.unit_id for r in structural_search(rules_profile("string concatenation before execute"), units, records, k=50, fragments=fragments)}
+    assert unsafe == {"db.py::find_user_unsafe"}
+
+
+def test_generic_reading_coexists_with_counts_and_reasons_are_readable():
+    profile = rules_profile("recursive function with validation before execute")
+    assert [c.reason for c in profile.constraints] == ["recursion"]
+    assert profile.relations[0].reason == "validation before execute"
+    negated = rules_profile("no check before query").relations[0]
+    assert negated.reason == "no: check before query" and negated.clauses[0].negate

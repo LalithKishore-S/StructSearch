@@ -8,6 +8,7 @@ import yaml
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
 REQUIRED_WEIGHTS = ("text", "structural", "graph")
+HYBRID_WEIGHTS = ("text", "dense", "structural", "graph")
 
 
 def load_config(path: Optional[Path] = None) -> Dict[str, Any]:
@@ -27,6 +28,15 @@ def validate_config(cfg: Dict[str, Any]) -> None:
             raise ValueError(f"negative weight: {key}")
     if sum(weights.values()) <= 0:
         raise ValueError("weights must not all be zero")
+    hybrid = cfg.get("hybrid_weights")
+    if hybrid is not None:
+        for key in HYBRID_WEIGHTS:
+            if key not in hybrid:
+                raise ValueError(f"missing hybrid weight: {key}")
+            if hybrid[key] < 0:
+                raise ValueError(f"negative hybrid weight: {key}")
+        if sum(hybrid.values()) <= 0:
+            raise ValueError("hybrid weights must not all be zero")
     if int(cfg.get("top_k", 0)) < 1:
         raise ValueError("top_k must be >= 1")
     bm25 = cfg.get("bm25")

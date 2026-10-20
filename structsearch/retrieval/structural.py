@@ -167,7 +167,7 @@ def structural_scores(
     }
 
 
-def _evidence(match: UnitMatch) -> List[str]:
+def match_evidence(match: UnitMatch) -> List[str]:
     lines = []
     for label, entries in (("match", match.matched), ("miss", match.missed)):
         for item, value in entries:
@@ -212,7 +212,7 @@ def structural_search(
             structural_score=match.score,
             graph_score=None,
             final_score=match.score,
-            evidence=_evidence(match),
+            evidence=match_evidence(match),
         )
         for unit_id, match in scored[: max(k, 0)]
     ]
@@ -375,11 +375,75 @@ def _is_negated(prefix: str) -> bool:
     return _NEGATOR.search(prefix) is not None
 
 
+# Words that name a kind of code part, for the generic "X before / after / inside / containing Y" reading.
+_EXEC_LABELS = "Call:execute|Call:executemany|Call:executescript"
+_CHECK_LABELS = "If|Assert"
+VOCAB: Dict[str, str] = {
+    "function call": "Call", "function calls": "Call", "call": "Call", "calls": "Call",
+    "execute": _EXEC_LABELS, "executes": _EXEC_LABELS, "execution": _EXEC_LABELS,
+    "query": _EXEC_LABELS, "queries": _EXEC_LABELS, "db call": _EXEC_LABELS,
+    "open": "Call:open", "opens": "Call:open", "eval": "Call:eval|Call:exec",
+    "for loop": "For", "for loops": "For", "while loop": "While", "while loops": "While",
+    "loop": "For|While", "loops": "For|While", "iteration": "For|While",
+    "try except": "Try", "try/except": "Try", "try block": "Try", "try": "Try", "error handling": "Try",
+    "exception handling": "Try", "except block": "ExceptHandler", "except": "ExceptHandler",
+    "exception handler": "ExceptHandler", "handler": "ExceptHandler",
+    "if statement": "If", "if": "If", "condition": "If", "conditional": "If", "branch": "If",
+    "check": _CHECK_LABELS, "checks": _CHECK_LABELS, "validation": _CHECK_LABELS, "validate": _CHECK_LABELS,
+    "guard": _CHECK_LABELS, "guard clause": _CHECK_LABELS, "assertion": "Assert", "assert": "Assert",
+    "raise": "Raise", "raises": "Raise", "throw": "Raise", "throws": "Raise",
+    "return": "Return", "returns": "Return",
+    "with statement": "With", "with block": "With", "context manager": "With",
+    "string concatenation": "BinOp:Add|BinOp:Mod|JoinedStr|Call:format", "concatenation": "BinOp:Add|BinOp:Mod|JoinedStr|Call:format",
+    "string formatting": "BinOp:Add|BinOp:Mod|JoinedStr|Call:format", "formatting": "BinOp:Add|BinOp:Mod|JoinedStr|Call:format",
+    "f-string": "JoinedStr", "string building": "BinOp:Add|BinOp:Mod|JoinedStr|Call:format",
+    "await": "Await", "yield": "Yield", "assignment": "Assign", "import": "Import",
+}
+# relation word -> (operator, swap): "A before B" is A=>B; "A after B" is B=>A; "A inside B" is B//A.
+RELATION_WORDS: Dict[str, Tuple[str, bool]] = {
+    "before": ("=>", False), "prior to": ("=>", False), "ahead of": ("=>", False),
+    "after": ("=>", True), "following": ("=>", True),
+    "inside of": ("//", True), "inside": ("//", True), "within": ("//", True), "in": ("//", True),
+    "nested in": ("//", True), "nested within": ("//", True),
+    "containing": ("//", False), "contains": ("//", False), "that contains": ("//", False),
+    "which contains": ("//", False), "that has": ("//", False), "having": ("//", False),
+    "with a": ("//", False), "with an": ("//", False),
+}
+_alt = lambda words: "|".join(re.escape(w) for w in sorted(words, key=len, reverse=True))  # noqa: E731
+_RELATIONAL = re.compile(
+    rf"\b(?P<a>{_alt(VOCAB)})\s+(?P<op>{_alt(RELATION_WORDS)})\s+(?:(?:a|an|the|each|every|any)\s+)?(?P<b>{_alt(VOCAB)})\b"
+)
+
+
+def _relational_matches(text: str) -> List[Tuple[int, int, Relation, Relation]]:
+    """'call before execute', 'try inside a loop', 'loop containing a call' -> (start, end, positive, negated)."""
+    out = []
+    for match in _RELATIONAL.finditer(text):
+        a_words, b_words = match.group("a"), match.group("b")
+        op, swap = RELATION_WORDS[match.group("op")]
+        left, right = VOCAB[a_words], VOCAB[b_words]
+        if swap:
+            left, right = right, left
+        try:
+            positive = parse_pattern(f"{left}{op}{right}")
+        except PatternError:  # e.g. '=>' with labels that have no meaningful order
+            continue
+        reason = f"{a_words} {match.group('op')} {b_words}"
+        out.append((match.start(), match.end(), positive.with_reason(reason),
+                    parse_pattern(f"!{left}{op}{right}").with_reason(f"no: {reason}")))
+    return out
+
+
 def rules_profile(query: str) -> ConstraintProfile:
     """Deterministic query -> profile. Unknown wording simply yields fewer (or no) constraints."""
     text = query.lower()
     consumed: List[Tuple[int, int]] = []
-    found: List[Tuple[int, Tuple[Constraint, ...]]] = []
+    found: List[Tuple[int, Tuple[Union[Constraint, Relation], ...]]] = []
+    for start, end, positive, negative in _relational_matches(text):
+        if any(start < c_end and c_start < end for c_start, c_end in consumed):
+            continue
+        consumed.append((start, end))
+        found.append((start, (negative,) if _is_negated(text[:start]) else (positive,)))
     for rule in RULES:
         for match in rule.pattern.finditer(text):
             span = (match.start(), match.end())
