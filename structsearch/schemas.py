@@ -54,7 +54,11 @@ class AstRecord(_Record):
 
 @dataclass
 class RankedResult(_Record):
-    """graph_score is None until the graph module is integrated."""
+    """graph_score is None until the graph module is integrated.
+
+    dense_score (semantic cosine similarity) is None unless the dense variant ran. It was
+    added at the end of the record so existing positional uses keep working.
+    """
 
     query_id: str
     unit_id: str
@@ -63,6 +67,7 @@ class RankedResult(_Record):
     graph_score: Optional[float] = None
     final_score: float = 0.0
     evidence: List[str] = field(default_factory=list)
+    dense_score: Optional[float] = None
 
 
 @dataclass

@@ -106,7 +106,7 @@ def test_json_output_is_clean_and_complete(capsys, tmp_path, corpus):
 
 def test_failed_file_result_is_flagged(capsys, tmp_path, corpus):
     _, out, _ = _run(capsys, tmp_path, corpus, "broken syntax", "-k", "1")
-    assert "[parse failed]" in out and "text match only" in out
+    assert "[parse failed]" in out and "whole-file match only" in out
 
 
 def test_skip_failed_removes_broken_file(capsys, tmp_path, corpus):

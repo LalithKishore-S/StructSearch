@@ -20,6 +20,19 @@ bm25:
     doc: 1.5
     code: 1.0
 
+# Dense semantic baseline (Step 3b). Embeddings come from a local Ollama server.
+# nomic-embed-text expects the two task prefixes; for another model, set both to "".
+# backend "hashing" is a lexical stand-in for tests and offline demos, NOT semantic.
+dense:
+  backend: ollama
+  model: nomic-embed-text
+  host: http://localhost:11434
+  doc_prefix: "search_document: "
+  query_prefix: "search_query: "
+  max_chars: 4000
+  batch_size: 16
+  timeout_seconds: 120
+
 # Optional local LLM (off by default; every LLM path has a rule-based fallback).
 llm:
   enabled: false

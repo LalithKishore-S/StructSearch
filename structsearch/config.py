@@ -38,3 +38,15 @@ def validate_config(cfg: Dict[str, Any]) -> None:
         for name, weight in bm25.get("field_weights", {}).items():
             if weight < 0:
                 raise ValueError(f"negative bm25 field weight: {name}")
+    dense = cfg.get("dense")
+    if dense is not None:
+        if dense.get("backend", "ollama") not in ("ollama", "hashing"):
+            raise ValueError("dense.backend must be 'ollama' or 'hashing'")
+        if int(dense.get("batch_size", 16)) < 1:
+            raise ValueError("dense.batch_size must be >= 1")
+        if int(dense.get("max_chars", 4000)) < 100:
+            raise ValueError("dense.max_chars must be >= 100")
+        if float(dense.get("timeout_seconds", 120)) <= 0:
+            raise ValueError("dense.timeout_seconds must be > 0")
+        if not str(dense.get("model", "x")).strip():
+            raise ValueError("dense.model must not be empty")
