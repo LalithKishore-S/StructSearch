@@ -10,7 +10,8 @@ Each signal gives every unit a raw score. Per query:
        dense         min-max. Cosine similarities of related texts cluster in a narrow band, so
                      only stretching that band separates units;
        structural    used as is: it is already an absolute fraction of satisfied requirements;
-  3. weights are renormalized over the active signals, so a missing signal never lowers anyone;
+  3. weights are renormalized over the active signals, so a missing signal never lowers anyone; a signal
+     whose configured weight is 0 is removed (unless every weight is 0, which means equal weights);
   4. final = sum(weight * normalized score), ties broken by unit_id.
 
 Units whose file did not parse have no AST evidence: their structural score is 0, but they keep
@@ -119,7 +120,11 @@ def fuse(
     unknown = [s.name for s in signals if s.name not in SIGNALS]
     if unknown:
         raise ValueError(f"unknown signal(s): {', '.join(unknown)}")
-    active_signals = [s for s in sorted(signals, key=lambda s: SIGNALS.index(s.name)) if is_active(s)]
+    # A signal with weight 0 is removed, not just silenced: otherwise, when the weighted signals carry no
+    # information, the equal-weights fallback would hand the removed signal full weight. Only when no signal
+    # has a positive weight at all (nothing to honour) are all signals kept.
+    wanted = [s for s in signals if float(weights.get(s.name, 0.0)) > 0] or list(signals)
+    active_signals = [s for s in sorted(wanted, key=lambda s: SIGNALS.index(s.name)) if is_active(s)]
     names = [s.name for s in active_signals]
     eff = effective_weights(names, weights)
     if not active_signals:
@@ -214,8 +219,14 @@ def structural_signal(
     return Signal("structural", scores, "none", evidence)
 
 
-def graph_signal(graph_scores: Optional[Mapping[str, float]]) -> Optional[Signal]:
-    return Signal("graph", dict(graph_scores), "max") if graph_scores else None
+def graph_signal(
+    graph_scores: Optional[Mapping[str, float]], evidence: Optional[Mapping[str, Sequence[str]]] = None
+) -> Optional[Signal]:
+    """None without scores. `evidence` maps unit_id -> factual lines (e.g. `edge: a -> b (call, line 3)`)."""
+    if not graph_scores:
+        return None
+    lines = (lambda unit_id: list(evidence.get(unit_id, ()))) if evidence else None
+    return Signal("graph", dict(graph_scores), "max", lines)
 
 
 def fused_search(
@@ -232,6 +243,7 @@ def fused_search(
     fragments: Optional[Sequence[FragmentRecord]] = None,
     dense: Optional[Tuple[DenseIndex, Embedder, DenseSettings]] = None,
     graph_scores: Optional[Mapping[str, float]] = None,
+    graph_evidence: Optional[Mapping[str, Sequence[str]]] = None,
 ) -> FusionOutcome:
     """BM25 plus any of: structural profile, dense index, graph scores. Absent inputs are simply not used."""
     signals: List[Signal] = [text_signal(bm25_index, query)]
@@ -241,7 +253,7 @@ def fused_search(
         structural = structural_signal(profile, ast_records, fragments)
         if structural is not None:
             signals.append(structural)
-    graph = graph_signal(graph_scores)
+    graph = graph_signal(graph_scores, graph_evidence)
     if graph is not None:
         signals.append(graph)
 

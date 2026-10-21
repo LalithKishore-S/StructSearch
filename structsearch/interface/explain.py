@@ -53,6 +53,9 @@ class Explanation:
 # --------------------------------------------------------------------------- template
 
 
+GRAPH_EVIDENCE_PREFIXES = ("edge: ", "marker: ", "order: ", "structure: ")  # lines written by the graph scorer
+
+
 def _split(line: str, prefix: str) -> Optional[str]:
     return line[len(prefix):].strip() if line.startswith(prefix) else None
 
@@ -66,6 +69,7 @@ def template_explanation(result: RankedResult, unit: CodeUnit) -> Explanation:
     missed: List[str] = []
     found: List[str] = []
     shared: List[str] = []
+    graph: List[str] = []
     breakdown: Optional[str] = None
     parse_note: Optional[str] = None
     partial_note: Optional[str] = None
@@ -87,6 +91,8 @@ def template_explanation(result: RankedResult, unit: CodeUnit) -> Explanation:
             found.append(rest)
         elif (rest := _split(line, "shared structure: ")) is not None:
             shared.append(rest)
+        elif line.startswith(GRAPH_EVIDENCE_PREFIXES):
+            graph.append(line)
         elif (rest := _split(line, "fusion: ")) is not None:
             breakdown = rest
         elif line.startswith("partial parse"):
@@ -111,6 +117,8 @@ def template_explanation(result: RankedResult, unit: CodeUnit) -> Explanation:
         points.append(f"Does not satisfy: {'; '.join(missed)}.")
     if shared:
         points.append(f"Has the same structure as the example: {'; '.join(shared)}.")
+    if graph:
+        points.append("Call-graph evidence: " + "; ".join(graph) + ".")
     if breakdown:
         points.append(f"Score breakdown: {breakdown}.")
     if partial_note:

@@ -1,0 +1,438 @@
+[
+  {
+    "query_id": "L08",
+    "query": "append a message to a log file",
+    "variant": "text_ast_graph-text",
+    "category": "lexical",
+    "kind": "top-1 not relevant",
+    "top1": "files.py::read_config_safe",
+    "relevant_missing": []
+  },
+  {
+    "query_id": "L09",
+    "query": "read all lines of a file",
+    "variant": "text_ast_graph-text",
+    "category": "lexical",
+    "kind": "top-1 not relevant",
+    "top1": "files.py::read_config_safe",
+    "relevant_missing": []
+  },
+  {
+    "query_id": "L11",
+    "query": "look up a user by name in the database",
+    "variant": "text_ast_graph-text",
+    "category": "lexical",
+    "kind": "top-1 not relevant",
+    "top1": "db.py::count_rows",
+    "relevant_missing": []
+  },
+  {
+    "query_id": "L12",
+    "query": "create a tree node with left and right children",
+    "variant": "bm25",
+    "category": "lexical",
+    "kind": "top-1 not relevant",
+    "top1": "trees.py::inorder_traverse",
+    "relevant_missing": []
+  },
+  {
+    "query_id": "L12",
+    "query": "create a tree node with left and right children",
+    "variant": "text_ast",
+    "category": "lexical",
+    "kind": "top-1 not relevant",
+    "top1": "trees.py::inorder_traverse",
+    "relevant_missing": []
+  },
+  {
+    "query_id": "L12",
+    "query": "create a tree node with left and right children",
+    "variant": "text_graph",
+    "category": "lexical",
+    "kind": "top-1 not relevant",
+    "top1": "trees.py::inorder_traverse",
+    "relevant_missing": []
+  },
+  {
+    "query_id": "L12",
+    "query": "create a tree node with left and right children",
+    "variant": "text_ast_graph",
+    "category": "lexical",
+    "kind": "top-1 not relevant",
+    "top1": "trees.py::inorder_traverse",
+    "relevant_missing": []
+  },
+  {
+    "query_id": "L12",
+    "query": "create a tree node with left and right children",
+    "variant": "text_ast_graph-text",
+    "category": "lexical",
+    "kind": "top-1 not relevant",
+    "top1": "trees.py::inorder_traverse",
+    "relevant_missing": []
+  },
+  {
+    "query_id": "L12",
+    "query": "create a tree node with left and right children",
+    "variant": "text_ast_graph-structural",
+    "category": "lexical",
+    "kind": "top-1 not relevant",
+    "top1": "trees.py::inorder_traverse",
+    "relevant_missing": []
+  },
+  {
+    "query_id": "L12",
+    "query": "create a tree node with left and right children",
+    "variant": "text_ast_graph-graph",
+    "category": "lexical",
+    "kind": "top-1 not relevant",
+    "top1": "trees.py::inorder_traverse",
+    "relevant_missing": []
+  },
+  {
+    "query_id": "R01",
+    "query": "validate user input before database access",
+    "variant": "text_ast",
+    "category": "relationship",
+    "kind": "top-1 not relevant",
+    "top1": "db.py::validate_user_input",
+    "relevant_missing": []
+  },
+  {
+    "query_id": "R01",
+    "query": "validate user input before database access",
+    "variant": "text_ast_graph-graph",
+    "category": "relationship",
+    "kind": "top-1 not relevant",
+    "top1": "db.py::validate_user_input",
+    "relevant_missing": []
+  },
+  {
+    "query_id": "R02",
+    "query": "sanitize the username and then run a SQL query",
+    "variant": "bm25",
+    "category": "relationship",
+    "kind": "top-1 not relevant",
+    "top1": "db.py::find_user_unsafe",
+    "relevant_missing": []
+  },
+  {
+    "query_id": "R02",
+    "query": "sanitize the username and then run a SQL query",
+    "variant": "text_ast",
+    "category": "relationship",
+    "kind": "top-1 not relevant",
+    "top1": "db.py::find_user_unsafe",
+    "relevant_missing": []
+  },
+  {
+    "query_id": "R02",
+    "query": "sanitize the username and then run a SQL query",
+    "variant": "text_ast_graph-graph",
+    "category": "relationship",
+    "kind": "no relevant result in top-k",
+    "top1": "db.py::find_user_unsafe",
+    "relevant_missing": [
+      "db.py::get_user"
+    ]
+  },
+  {
+    "query_id": "R03",
+    "query": "check the input first, then query the database",
+    "variant": "text_ast",
+    "category": "relationship",
+    "kind": "top-1 not relevant",
+    "top1": "db.py::validate_user_input",
+    "relevant_missing": []
+  },
+  {
+    "query_id": "R03",
+    "query": "check the input first, then query the database",
+    "variant": "text_ast_graph-graph",
+    "category": "relationship",
+    "kind": "top-1 not relevant",
+    "top1": "db.py::validate_user_input",
+    "relevant_missing": []
+  },
+  {
+    "query_id": "R04",
+    "query": "make sure the argument is acceptable before it reaches the database layer",
+    "variant": "text_ast_graph-text",
+    "category": "relationship",
+    "kind": "top-1 not relevant",
+    "top1": "db.py::count_rows",
+    "relevant_missing": []
+  },
+  {
+    "query_id": "R06",
+    "query": "queries that run without checking their input",
+    "variant": "bm25",
+    "category": "relationship",
+    "kind": "top-1 not relevant",
+    "top1": "db.py::validate_user_input",
+    "relevant_missing": [
+      "db.py::count_rows"
+    ]
+  },
+  {
+    "query_id": "R06",
+    "query": "queries that run without checking their input",
+    "variant": "text_ast",
+    "category": "relationship",
+    "kind": "top-1 not relevant",
+    "top1": "db.py::validate_user_input",
+    "relevant_missing": [
+      "db.py::count_rows"
+    ]
+  },
+  {
+    "query_id": "R06",
+    "query": "queries that run without checking their input",
+    "variant": "text_ast_graph-graph",
+    "category": "relationship",
+    "kind": "top-1 not relevant",
+    "top1": "db.py::validate_user_input",
+    "relevant_missing": [
+      "db.py::count_rows"
+    ]
+  },
+  {
+    "query_id": "R08",
+    "query": "function that calls itself",
+    "variant": "bm25",
+    "category": "relationship",
+    "kind": "no relevant result in top-k",
+    "top1": null,
+    "relevant_missing": [
+      "trees.py::factorial",
+      "trees.py::inorder_traverse"
+    ]
+  },
+  {
+    "query_id": "R12",
+    "query": "function that calls another function defined in the same file",
+    "variant": "bm25",
+    "category": "relationship",
+    "kind": "no relevant result in top-k",
+    "top1": "files.py::read_config_safe",
+    "relevant_missing": [
+      "db.py::get_user"
+    ]
+  },
+  {
+    "query_id": "R12",
+    "query": "function that calls another function defined in the same file",
+    "variant": "text_ast",
+    "category": "relationship",
+    "kind": "no relevant result in top-k",
+    "top1": "files.py::read_config_safe",
+    "relevant_missing": [
+      "db.py::get_user"
+    ]
+  },
+  {
+    "query_id": "R12",
+    "query": "function that calls another function defined in the same file",
+    "variant": "text_graph",
+    "category": "relationship",
+    "kind": "no relevant result in top-k",
+    "top1": "files.py::read_config_safe",
+    "relevant_missing": [
+      "db.py::get_user"
+    ]
+  },
+  {
+    "query_id": "R12",
+    "query": "function that calls another function defined in the same file",
+    "variant": "text_ast_graph",
+    "category": "relationship",
+    "kind": "no relevant result in top-k",
+    "top1": "files.py::read_config_safe",
+    "relevant_missing": [
+      "db.py::get_user"
+    ]
+  },
+  {
+    "query_id": "R12",
+    "query": "function that calls another function defined in the same file",
+    "variant": "text_ast_graph-text",
+    "category": "relationship",
+    "kind": "no relevant result in top-k",
+    "top1": "files.py::read_config_safe",
+    "relevant_missing": [
+      "db.py::get_user"
+    ]
+  },
+  {
+    "query_id": "R12",
+    "query": "function that calls another function defined in the same file",
+    "variant": "text_ast_graph-structural",
+    "category": "relationship",
+    "kind": "no relevant result in top-k",
+    "top1": "files.py::read_config_safe",
+    "relevant_missing": [
+      "db.py::get_user"
+    ]
+  },
+  {
+    "query_id": "R12",
+    "query": "function that calls another function defined in the same file",
+    "variant": "text_ast_graph-graph",
+    "category": "relationship",
+    "kind": "no relevant result in top-k",
+    "top1": "files.py::read_config_safe",
+    "relevant_missing": [
+      "db.py::get_user"
+    ]
+  },
+  {
+    "query_id": "R14",
+    "query": "SQL text assembled by joining strings with caller supplied values",
+    "variant": "bm25",
+    "category": "relationship",
+    "kind": "top-1 not relevant",
+    "top1": "utils.py::slugify",
+    "relevant_missing": [
+      "db.py::count_rows"
+    ]
+  },
+  {
+    "query_id": "R14",
+    "query": "SQL text assembled by joining strings with caller supplied values",
+    "variant": "text_ast",
+    "category": "relationship",
+    "kind": "top-1 not relevant",
+    "top1": "utils.py::slugify",
+    "relevant_missing": [
+      "db.py::count_rows"
+    ]
+  },
+  {
+    "query_id": "R14",
+    "query": "SQL text assembled by joining strings with caller supplied values",
+    "variant": "text_ast_graph-graph",
+    "category": "relationship",
+    "kind": "top-1 not relevant",
+    "top1": "utils.py::slugify",
+    "relevant_missing": [
+      "db.py::count_rows"
+    ]
+  },
+  {
+    "query_id": "R16",
+    "query": "opens a file without error handling",
+    "variant": "bm25",
+    "category": "relationship",
+    "kind": "top-1 not relevant",
+    "top1": "files.py::read_config_safe",
+    "relevant_missing": []
+  },
+  {
+    "query_id": "R16",
+    "query": "opens a file without error handling",
+    "variant": "text_graph",
+    "category": "relationship",
+    "kind": "top-1 not relevant",
+    "top1": "files.py::read_config_safe",
+    "relevant_missing": []
+  },
+  {
+    "query_id": "R16",
+    "query": "opens a file without error handling",
+    "variant": "text_ast_graph-structural",
+    "category": "relationship",
+    "kind": "top-1 not relevant",
+    "top1": "files.py::read_config_safe",
+    "relevant_missing": []
+  },
+  {
+    "query_id": "R17",
+    "query": "opening files without catching exceptions",
+    "variant": "bm25",
+    "category": "relationship",
+    "kind": "no relevant result in top-k",
+    "top1": "db.py::find_user_unsafe",
+    "relevant_missing": [
+      "files.py::read_lines",
+      "files.py::write_log"
+    ]
+  },
+  {
+    "query_id": "R17",
+    "query": "opening files without catching exceptions",
+    "variant": "text_ast",
+    "category": "relationship",
+    "kind": "no relevant result in top-k",
+    "top1": "db.py::find_user_unsafe",
+    "relevant_missing": [
+      "files.py::read_lines",
+      "files.py::write_log"
+    ]
+  },
+  {
+    "query_id": "R17",
+    "query": "opening files without catching exceptions",
+    "variant": "text_graph",
+    "category": "relationship",
+    "kind": "top-1 not relevant",
+    "top1": "files.py::read_config_safe",
+    "relevant_missing": []
+  },
+  {
+    "query_id": "R17",
+    "query": "opening files without catching exceptions",
+    "variant": "text_ast_graph",
+    "category": "relationship",
+    "kind": "top-1 not relevant",
+    "top1": "files.py::read_config_safe",
+    "relevant_missing": []
+  },
+  {
+    "query_id": "R17",
+    "query": "opening files without catching exceptions",
+    "variant": "text_ast_graph-text",
+    "category": "relationship",
+    "kind": "top-1 not relevant",
+    "top1": "files.py::read_config_safe",
+    "relevant_missing": []
+  },
+  {
+    "query_id": "R17",
+    "query": "opening files without catching exceptions",
+    "variant": "text_ast_graph-structural",
+    "category": "relationship",
+    "kind": "top-1 not relevant",
+    "top1": "files.py::read_config_safe",
+    "relevant_missing": []
+  },
+  {
+    "query_id": "R17",
+    "query": "opening files without catching exceptions",
+    "variant": "text_ast_graph-graph",
+    "category": "relationship",
+    "kind": "no relevant result in top-k",
+    "top1": "db.py::find_user_unsafe",
+    "relevant_missing": [
+      "files.py::read_lines",
+      "files.py::write_log"
+    ]
+  },
+  {
+    "query_id": "R19",
+    "query": "recursive tree traversal",
+    "variant": "text_ast_graph-text",
+    "category": "relationship",
+    "kind": "top-1 not relevant",
+    "top1": "trees.py::factorial",
+    "relevant_missing": []
+  },
+  {
+    "query_id": "R20",
+    "query": "in-order walk of a tree that calls itself",
+    "variant": "text_ast_graph-text",
+    "category": "relationship",
+    "kind": "top-1 not relevant",
+    "top1": "trees.py::factorial",
+    "relevant_missing": []
+  }
+]

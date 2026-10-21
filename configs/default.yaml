@@ -1,16 +1,33 @@
 # StructSearch default configuration.
-# Tune weights on dev queries only. Weights of --mode text_ast. A missing signal (no graph score,
-# no structural wording in the query) is dropped and the remaining weights are renormalized (Step 6).
+# Fusion weights were tuned on the dev split only (K = 3, nDCG@3, grid step 0.25, every signal of a mode keeps
+# at least 0.25; logs in experiments/runs/tuning/) and frozen before the test split was run. A missing
+# signal (no graph score, no structural wording in the query) or a signal with weight 0 is dropped and the
+# remaining weights are renormalized (Step 6).
+# Weights of --mode text_ast (the graph weight is unused: this mode has no graph signal).
 corpus_path: tests/fixtures/sample_corpus
 index_dir: .structsearch_index
 top_k: 10
 
 weights:
-  text: 0.6
-  structural: 0.3
-  graph: 0.1
+  text: 0.75
+  structural: 0.25
+  graph: 0.0
 
-# Weights for --mode hybrid (BM25 + dense + structural [+ graph]). A signal that is missing or carries
+# Weights for --mode text_graph (BM25 + call-graph relationships). A query that names no relationship the
+# graph can express has no graph signal and is ranked by text alone. Tune on dev queries only.
+text_graph_weights:
+  text: 0.5
+  graph: 0.5
+
+# Weights for --mode text_ast_graph (BM25 + AST structure + call graph: the plan's full hybrid, no dense
+# embeddings). Tuned on dev queries only (experiments/runs/tuning/).
+text_ast_graph_weights:
+  text: 0.25
+  structural: 0.25
+  graph: 0.5
+
+# Weights for --mode hybrid (BM25 + dense + structural + graph). NOT tuned: the dense signal needs a local Ollama
+# embedding model, which was not available for the experiments. A signal that is missing or carries
 # no information for a query (e.g. a query without structural wording) is dropped and the rest are
 # rescaled to sum to 1, so these are relative importances, not absolute shares.
 hybrid_weights:

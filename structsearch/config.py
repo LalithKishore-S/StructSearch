@@ -9,6 +9,8 @@ import yaml
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
 REQUIRED_WEIGHTS = ("text", "structural", "graph")
 HYBRID_WEIGHTS = ("text", "dense", "structural", "graph")
+TEXT_GRAPH_WEIGHTS = ("text", "graph")
+TEXT_AST_GRAPH_WEIGHTS = ("text", "structural", "graph")
 
 
 def load_config(path: Optional[Path] = None) -> Dict[str, Any]:
@@ -28,6 +30,24 @@ def validate_config(cfg: Dict[str, Any]) -> None:
             raise ValueError(f"negative weight: {key}")
     if sum(weights.values()) <= 0:
         raise ValueError("weights must not all be zero")
+    text_graph = cfg.get("text_graph_weights")
+    if text_graph is not None:
+        for key in TEXT_GRAPH_WEIGHTS:
+            if key not in text_graph:
+                raise ValueError(f"missing text_graph weight: {key}")
+            if text_graph[key] < 0:
+                raise ValueError(f"negative text_graph weight: {key}")
+        if sum(text_graph.values()) <= 0:
+            raise ValueError("text_graph weights must not all be zero")
+    full = cfg.get("text_ast_graph_weights")
+    if full is not None:
+        for key in TEXT_AST_GRAPH_WEIGHTS:
+            if key not in full:
+                raise ValueError(f"missing text_ast_graph weight: {key}")
+            if full[key] < 0:
+                raise ValueError(f"negative text_ast_graph weight: {key}")
+        if sum(full.values()) <= 0:
+            raise ValueError("text_ast_graph weights must not all be zero")
     hybrid = cfg.get("hybrid_weights")
     if hybrid is not None:
         for key in HYBRID_WEIGHTS:

@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
+from structsearch.graph import GraphResult, ensure_graph, score_graph
 from structsearch.indexing.builder import FAILED_FILE, ensure_index
 from structsearch.indexing.dense import ensure_dense_index
 from structsearch.indexing.embedder import DenseSettings, make_embedder
@@ -25,8 +26,10 @@ from structsearch.retrieval.patterns import PatternError, parse_pattern
 from structsearch.retrieval.structural import ConstraintProfile, build_profile, structural_search
 from structsearch.schemas import CodeUnit, RankedResult
 
-MODES = ("bm25", "dense", "structural", "like", "text_ast", "hybrid")
-FUSED_MODES = ("text_ast", "hybrid")
+MODES = ("bm25", "dense", "structural", "like", "text_ast", "text_graph", "text_ast_graph", "hybrid")
+FUSED_MODES = ("text_ast", "text_graph", "text_ast_graph", "hybrid")
+STRUCTURE_MODES = ("text_ast", "text_ast_graph", "hybrid")  # fused modes that use AST structure
+GRAPH_MODES = ("text_graph", "text_ast_graph", "hybrid")  # fused modes that use call-graph relationships
 
 Notify = Callable[[str], None]
 Progress = Callable[[int, int], None]
@@ -59,6 +62,7 @@ class SearchRequest:
     model: Optional[str] = None  # embedding model; None = config
     llm: LLMSettings = field(default_factory=LLMSettings)  # query mapper settings
     patterns: List[str] = field(default_factory=list)
+    intents: List[str] = field(default_factory=list)  # explicit graph relationships (see structsearch.graph.INTENTS)
     weights: List[str] = field(default_factory=list)  # "signal=value" overrides
 
 
@@ -123,9 +127,36 @@ def structure_inputs(req: SearchRequest, units, notify: Notify = _silent):
     return profile, records, fragments
 
 
+def graph_inputs(req: SearchRequest, units, records=None, notify: Notify = _silent) -> GraphResult:
+    """Graph relationships of the query (or the explicit ones) scored over the corpus graph."""
+    graph, reason = ensure_graph(units, req.index_dir)
+    if reason:
+        notify(f"graph built ({reason}): {len(graph.nodes)} nodes, {len(graph.edges)} edges")
+    if records is None:
+        records, reason = ensure_ast_records(units, req.index_dir)
+        if reason:
+            notify(f"AST features extracted ({reason}): {len(records)} units")
+    try:
+        result = score_graph(graph, None if req.intents else req.query, req.intents or None, records)
+    except ValueError as exc:
+        raise SearchError(str(exc)) from exc
+    if result.intents:
+        notify(f"graph relationships: {', '.join(result.intents)}")
+    else:
+        notify("note: no relationship the call graph can express was found in the query; ranking without the graph signal")
+    return result
+
+
 def fusion_weights(mode: str, cfg: Mapping[str, Any], overrides: List[str]) -> Dict[str, float]:
     """Config weights for the mode with "signal=value" overrides applied. Raises SearchError."""
-    weights = dict(cfg["hybrid_weights"] if mode == "hybrid" else cfg["weights"])
+    if mode == "hybrid":
+        weights = dict(cfg["hybrid_weights"])
+    elif mode == "text_graph":
+        weights = dict(cfg.get("text_graph_weights") or {"text": 0.7, "graph": 0.3})
+    elif mode == "text_ast_graph":
+        weights = dict(cfg.get("text_ast_graph_weights") or {"text": 0.5, "structural": 0.25, "graph": 0.25})
+    else:
+        weights = dict(cfg["weights"])
     for item in overrides:
         name, sep, raw = item.partition("=")
         name = name.strip()
@@ -181,7 +212,10 @@ def run_search(
         extra["profile"] = profile.to_dict()
         notify(f"structural profile ({profile.source}): {profile.describe()}")
     elif req.mode in FUSED_MODES:
-        profile, records, fragments = structure_inputs(req, units, notify)
+        profile = records = fragments = None
+        if req.mode in STRUCTURE_MODES:
+            profile, records, fragments = structure_inputs(req, units, notify)
+        graph_result = graph_inputs(req, units, records, notify) if req.mode in GRAPH_MODES else None
         weights = fusion_weights(req.mode, cfg, req.weights)
         dense = None
         if req.mode == "hybrid":
@@ -190,14 +224,19 @@ def run_search(
         outcome = fused_search(
             req.query, units_by_id, bm25_index, weights, req.k, req.query_id, failed_by_path,
             profile=profile, ast_records=records, fragments=fragments, dense=dense,
+            graph_scores=graph_result.scores if graph_result else None,
+            graph_evidence=graph_result.evidence if graph_result else None,
         )
         results = outcome.results
-        if profile.is_empty:
-            notify("note: no structural requirements found in the query; ranking without the structure signal")
-        else:
-            notify(f"structural profile ({profile.source}): {profile.describe()}")
+        if profile is not None:
+            if profile.is_empty:
+                notify("note: no structural requirements found in the query; ranking without the structure signal")
+            else:
+                notify(f"structural profile ({profile.source}): {profile.describe()}")
+            extra["profile"] = profile.to_dict()
+        if graph_result is not None:
+            extra["graph"] = {"intents": graph_result.intents, "scored_units": len(graph_result.scores)}
         notify("fusion signals: " + ", ".join(f"{n} {w:.2f}" for n, w in outcome.weights.items()))
-        extra["profile"] = profile.to_dict()
         extra["fusion"] = {"signals": outcome.active, "weights": {n: round(w, 6) for n, w in outcome.weights.items()}}
         if dense is not None:
             extra["embedding_model"] = dense[0].model

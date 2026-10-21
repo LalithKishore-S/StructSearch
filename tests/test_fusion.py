@@ -287,8 +287,10 @@ def test_text_ast_mode(capsys, tmp_path, cli_corpus):
     code, out, err = search(capsys, tmp_path, cli_corpus, "recursive tree traversal", "--mode", "text_ast", "-k", "3", "--lines", "0")
     assert code == 0 and "mode: text_ast" in out
     assert out.index("trees.py::inorder_traverse") < out.index("trees.py::factorial")
-    assert "fusion: text 1.00x0.67 + structural 1.00x0.33 = 1.000" in out
-    assert "fusion signals: text 0.67, structural 0.33" in err
+    w = load_config()["weights"]  # configured weights, renormalized over the two signals that took part
+    text_w, structural_w = (w[n] / (w["text"] + w["structural"]) for n in ("text", "structural"))
+    assert f"fusion: text 1.00x{text_w:.2f} + structural 1.00x{structural_w:.2f} = 1.000" in out
+    assert f"fusion signals: text {text_w:.2f}, structural {structural_w:.2f}" in err
 
 
 def test_text_ast_json(capsys, tmp_path, cli_corpus):
@@ -310,7 +312,7 @@ def test_query_without_structural_words_says_so(capsys, tmp_path, cli_corpus):
 def test_hybrid_mode(capsys, tmp_path, cli_corpus):
     code, out, err = search(capsys, tmp_path, cli_corpus, "validate user input", "--mode", "hybrid", "--json", "-k", "3", "--lines", "0")
     payload = json.loads(out)
-    assert code == 0 and payload["fusion"]["signals"] == ["text", "dense", "structural"]
+    assert code == 0 and payload["fusion"]["signals"] == ["text", "dense", "structural", "graph"]  # "validate" names a graph relationship
     assert payload["embedding_model"].startswith("hashing") and payload["results"][0]["dense_score"] is not None
     assert "dense index built" in err
 
@@ -319,10 +321,10 @@ def test_weight_override_changes_weights_and_can_remove_a_signal(capsys, tmp_pat
     code, out, _ = search(capsys, tmp_path, cli_corpus, "recursive tree traversal", "--mode", "text_ast", "--json",
                           "--weight", "structural=0", "--weight", "text=1", "--lines", "0")
     payload = json.loads(out)
-    assert payload["fusion"]["weights"] == {"text": 1.0, "structural": 0.0}
+    assert payload["fusion"]["weights"] == {"text": 1.0} and payload["fusion"]["signals"] == ["text"]  # structure removed
     code, out, _ = search(capsys, tmp_path, cli_corpus, "recursive tree traversal", "--mode", "text_ast", "--json",
                           "--weight", "structural=3", "--lines", "0")
-    assert json.loads(out)["fusion"]["weights"]["structural"] == pytest.approx(3 / 3.6, abs=1e-4)
+    assert json.loads(out)["fusion"]["weights"]["structural"] == pytest.approx(3 / (load_config()["weights"]["text"] + 3), abs=1e-4)
 
 
 @pytest.mark.parametrize("bad", ["structural", "bogus=1", "text=abc", "text=-1", "text=nan", "text=inf"])
@@ -346,3 +348,27 @@ def test_existing_modes_unchanged(capsys, tmp_path, cli_corpus):
     for mode in ("bm25", "dense", "structural"):
         code, out, _ = search(capsys, tmp_path, cli_corpus, "recursive", "--mode", mode, "-k", "1", "--lines", "0")
         assert code == 0 and f"mode: {mode}" in out
+
+
+# ---- a zero weight removes the signal ----
+
+def test_zero_weight_signal_is_removed_even_when_the_others_have_no_evidence():
+    text = sig("text", {"a": 0.0, "b": 0.0, "c": 0.0, "d": 0.0})  # BM25 matched nothing
+    structural = sig("structural", {"a": 1.0, "b": 0.5, "c": 0.0, "d": 0.0}, "none")
+    outcome = fuse([text, structural], {"text": 1.0, "structural": 0.0}, IDS)
+    assert outcome.results == [] and outcome.active == []  # structure was removed, not promoted to full weight
+
+
+def test_zero_weight_signal_is_dropped_from_the_active_signals():
+    text = sig("text", {"a": 1.0, "b": 0.5, "c": 0.0, "d": 0.0})
+    structural = sig("structural", {"a": 0.0, "b": 1.0, "c": 0.0, "d": 0.0}, "none")
+    outcome = fuse([text, structural], {"text": 1.0, "structural": 0.0}, IDS)
+    assert outcome.active == ["text"] and outcome.weights == {"text": 1.0}
+    assert ranking(outcome) == ["a", "b"]
+
+
+def test_all_zero_weights_still_fall_back_to_equal_weights():
+    text = sig("text", {"a": 1.0, "b": 0.0, "c": 0.0, "d": 0.0})
+    structural = sig("structural", {"a": 0.0, "b": 1.0, "c": 0.0, "d": 0.0}, "none")
+    outcome = fuse([text, structural], {"text": 0.0, "structural": 0.0}, IDS)
+    assert outcome.active == ["text", "structural"] and outcome.weights == {"text": 0.5, "structural": 0.5}

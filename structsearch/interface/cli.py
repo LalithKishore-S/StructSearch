@@ -6,11 +6,16 @@
   python -m structsearch features [UNIT]                show the AST features of one unit (or a table of all)
   python -m structsearch search "recursive traversal" --mode structural   AST-constraint search
   python -m structsearch search "recursive tree traversal" --mode text_ast   BM25 + structure, fused
-  python -m structsearch search "check credentials" --mode hybrid            BM25 + dense + structure, fused
+  python -m structsearch search "validate input before database access" --mode text_graph   BM25 + call graph, fused
+  python -m structsearch search "check credentials" --mode hybrid            BM25 + dense + structure + graph, fused
   python -m structsearch search "..." --mode structural --pattern "For//Try"   add an explicit pattern
   python -m structsearch search "@snippet.py" --mode like               structure similar to a code snippet
   python -m structsearch profile "read file without error handling"       show the constraints a query maps to
   python -m structsearch fragments UNIT                                  show a unit's structure relations
+  python -m structsearch graph [UNIT]                                    show the call graph (or one unit's calls, markers and callers)
+  python -m structsearch security                                        candidate paths from input to SQL construction
+  python -m structsearch benchmark check|freeze                          validate / freeze the query set and labels
+  python -m structsearch graph --markers                                 list the API/database/validation markers
 
 Status messages go to stderr so that --json output on stdout stays clean.
 Exit codes: 0 ok, 2 bad argument or missing corpus, 3 embedding backend problem.
@@ -26,6 +31,7 @@ from typing import Callable, List, Optional
 
 from structsearch.config import load_config
 from structsearch.indexing.builder import FAILED_FILE, ensure_index
+from structsearch.graph import INTENTS, REL_CALLS, REL_USES_API, describe_markers, ensure_graph
 from structsearch.indexing.embedder import EmbeddingError
 from structsearch.ingestion.corpus import load_failed
 from structsearch.interface.explain import explain_results
@@ -83,6 +89,16 @@ def _add_pattern_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_intent_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--intent",
+        action="append",
+        default=[],
+        choices=INTENTS,
+        help="call-graph relationship for text_graph/hybrid instead of reading it from the query (repeatable, averaged)",
+    )
+
+
 def _llm_settings(args, cfg) -> LLMSettings:
     enabled = True if getattr(args, "use_llm", False) else None  # None keeps the config value
     return LLMSettings.from_config(cfg, model=getattr(args, "llm_model", None), enabled=enabled)
@@ -116,12 +132,13 @@ def _build_parser(cfg) -> argparse.ArgumentParser:
     _add_dense_args(search_p)
     _add_llm_args(search_p)
     _add_pattern_arg(search_p)
+    _add_intent_arg(search_p)
     search_p.add_argument(
         "--weight",
         action="append",
         default=[],
         metavar="SIGNAL=VALUE",
-        help="override a fusion weight for text_ast/hybrid, e.g. --weight structural=0.5 (repeatable)",
+        help="override a fusion weight for text_ast/text_graph/hybrid, e.g. --weight structural=0.5 (repeatable)",
     )
 
     search_p.add_argument(
@@ -137,14 +154,19 @@ def _build_parser(cfg) -> argparse.ArgumentParser:
     exp_p = sub.add_parser("experiment", help="run variants over labelled queries and write result tables")
     exp_p.add_argument("--queries", required=True, help="queries file (json/jsonl/csv)")
     exp_p.add_argument("--labels", required=True, help="labels file (json/jsonl/csv)")
-    exp_p.add_argument("--variants", default="bm25,dense,text_ast,hybrid", help="comma list, e.g. bm25,text_ast,text_ast+llm")
+    exp_p.add_argument("--variants", default="bm25,dense,text_ast,text_graph,hybrid", help="comma list, e.g. bm25,text_ast,text_ast+llm,text_ast_graph-graph (-SIGNAL removes a signal)")
     exp_p.add_argument("--out", default="results")
     exp_p.add_argument("-k", type=int, default=cfg["top_k"])
     exp_p.add_argument("--corpus", default=cfg["corpus_path"])
     exp_p.add_argument("--index-dir", default=cfg["index_dir"])
     exp_p.add_argument("--final", action="store_true", help="also run the test split (do this once, after tuning on dev)")
-    exp_p.add_argument("--tune", choices=("text_ast", "hybrid"), default=None, help="grid-search fusion weights on dev only")
+    exp_p.add_argument("--tune", choices=("text_ast", "text_graph", "text_ast_graph", "hybrid"), default=None, help="grid-search fusion weights on dev only")
     exp_p.add_argument("--step", type=float, default=0.25, help="grid step for --tune")
+    exp_p.add_argument("--min-weight", type=float, default=0.0,
+                       help="with --tune: every signal keeps at least this weight (e.g. 0.25), so the variant stays what it is named")
+    exp_p.add_argument("--ks", default=None, help="comma list of K for the tables, e.g. 1,3,5 (the run retrieves max K); "
+                       "adds summary_by_k.csv, paired.csv, report.md and run.json")
+    exp_p.add_argument("--baseline", default=None, help="variant the paired comparison is made against (default: the first)")
     _add_dense_args(exp_p)
     _add_llm_args(exp_p)
 
@@ -163,6 +185,35 @@ def _build_parser(cfg) -> argparse.ArgumentParser:
     frag_p.add_argument("--skip-failed", action="store_true")
     frag_p.add_argument("--tolerant", action="store_true", help="recover functions from files that do not parse (needs tree-sitter)")
     frag_p.add_argument("--rebuild", action="store_true")
+
+    bench_p = sub.add_parser("benchmark", help="check or freeze the query set and its relevance labels")
+    bench_p.add_argument("action", choices=("check", "freeze"))
+    bench_p.add_argument("--queries", default="experiments/benchmark/queries.json")
+    bench_p.add_argument("--labels", default="experiments/benchmark/labels.jsonl")
+    bench_p.add_argument("--corpus", default=cfg["corpus_path"], help="corpus whose unit ids the labels must cover")
+    bench_p.add_argument("--lock", default=None, help="freeze lock (default: split.lock next to the queries file)")
+    bench_p.add_argument("--json", action="store_true")
+
+    sec_p = sub.add_parser("security", help="list candidate paths from input to SQL text construction (for review, not proof)")
+    sec_p.add_argument("-k", type=int, default=cfg["top_k"], help="number of candidates")
+    sec_p.add_argument("--corpus", default=cfg["corpus_path"])
+    sec_p.add_argument("--index-dir", default=cfg["index_dir"])
+    sec_p.add_argument("--min-level", choices=("low", "medium", "high"), default="low")
+    sec_p.add_argument("--lines", type=int, default=8, help="excerpt lines per candidate")
+    sec_p.add_argument("--json", action="store_true")
+    sec_p.add_argument("--skip-failed", action="store_true")
+    sec_p.add_argument("--tolerant", action="store_true", help="recover functions from files that do not parse (needs tree-sitter)")
+    sec_p.add_argument("--rebuild", action="store_true")
+
+    graph_p = sub.add_parser("graph", help="show the call graph of the corpus (or the calls and callers of one unit)")
+    graph_p.add_argument("unit", nargs="?", help="unit id or part of one, e.g. db.py::get_user")
+    graph_p.add_argument("--corpus", default=cfg["corpus_path"])
+    graph_p.add_argument("--index-dir", default=cfg["index_dir"])
+    graph_p.add_argument("--json", action="store_true")
+    graph_p.add_argument("--skip-failed", action="store_true")
+    graph_p.add_argument("--tolerant", action="store_true", help="recover functions from files that do not parse (needs tree-sitter)")
+    graph_p.add_argument("--rebuild", action="store_true")
+    graph_p.add_argument("--markers", action="store_true", help="list the API/database/validation markers and exit")
 
     feat_p = sub.add_parser("features", help="show AST features of a unit (or a table of all units)")
     feat_p.add_argument("unit", nargs="?", help="unit id or part of one, e.g. trees.py::factorial")
@@ -231,6 +282,133 @@ def _features_command(args) -> int:
     return 0
 
 
+def _security_command(args) -> int:
+    from structsearch.security import (
+        DISCLAIMER, LEVELS, NOT_MODELLED, PATTERN_QUERY, candidates_to_results, scan_sql_candidates,
+    )
+
+    loaded = _load(args, args.corpus)
+    if loaded is None:
+        return 2
+    units, _ = loaded
+    graph, reason = ensure_graph(units, args.index_dir)
+    if reason:
+        _err(f"graph built ({reason}): {len(graph.nodes)} nodes, {len(graph.edges)} edges")
+    order = [name for name, _ in LEVELS]
+    candidates = [c for c in scan_sql_candidates(units, graph) if order.index(c.level) <= order.index(args.min_level)]
+    total = len(candidates)
+    candidates = candidates[: args.k]
+    results = candidates_to_results(candidates)
+    units_by_id = {u.unit_id: u for u in units}
+    if args.json:
+        rows = []
+        for cand, res in zip(candidates, results):
+            row = result_to_dict(res, units_by_id[res.unit_id], args.lines)
+            row.update({"level": cand.level, "hops": cand.hops})
+            rows.append(row)
+        print(json.dumps({"pattern": PATTERN_QUERY, "disclaimer": DISCLAIMER, "not_modelled": NOT_MODELLED,
+                          "candidates_found": total, "results": rows}, indent=2))
+        return 0
+    print("Candidates for review, not confirmed vulnerabilities.")
+    if not results:
+        print(f'Pattern: "{PATTERN_QUERY}"\n\nNo candidates.')
+        return 0
+    print(format_results(PATTERN_QUERY, results, units_by_id, len(units), args.lines, mode="security"), end="")
+    if total > len(results):
+        print(f"({total - len(results)} more candidate(s); raise -k)")
+    print("Not modelled: " + "; ".join(NOT_MODELLED))
+    return 0
+
+
+def _benchmark_command(args) -> int:
+    from structsearch.evaluation import check_benchmark, freeze_benchmark
+    from structsearch.ingestion import ingest_corpus
+
+    try:
+        if not Path(args.corpus).exists():
+            raise OSError(f"corpus path not found: {args.corpus}")
+        unit_ids = [u.unit_id for u in ingest_corpus(args.corpus).units]
+        if args.action == "freeze":
+            lock = freeze_benchmark(args.queries, args.labels, unit_ids, args.lock)
+            print(f"frozen: {lock}")
+            return 0
+        report = check_benchmark(args.queries, args.labels, unit_ids, args.lock)
+    except (OSError, ValueError, KeyError) as exc:
+        _err(f"error: {exc}")
+        return 2
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        st = report.stats
+        print(f"queries: {st['queries']}   labels: {st['labels']}   units in pool: {st['units_in_pool']}")
+        for key, n in st["by_split_category"].items():
+            print(f"  {key:<20} {n}")
+        print(f"frozen: {'yes' if report.frozen else 'no'}")
+        for warning in report.warnings:
+            print(f"warning: {warning}")
+        print(f"problems: {len(report.problems)}")
+        for problem in report.problems:
+            print(f"  - {problem}")
+    return 2 if report.problems else 0
+
+
+def _graph_command(args) -> int:
+    if args.markers:
+        rows = describe_markers()
+        if args.json:
+            print(json.dumps(rows, indent=2))
+            return 0
+        width = max(len(r["label"]) for r in rows)
+        for r in rows:
+            print(f"{r['label']:<{width}}  {r['matches']}")
+            print(f"{'':<{width}}  {r['description']}")
+        return 0
+    loaded = _load(args, args.corpus)
+    if loaded is None:
+        return 2
+    units, _ = loaded
+    graph, reason = ensure_graph(units, args.index_dir)
+    if reason:
+        _err(f"graph built ({reason}): {len(graph.nodes)} nodes, {len(graph.edges)} edges")
+    if args.unit:
+        ids = [u for u in graph.nodes if u == args.unit] or [u for u in graph.nodes if args.unit in u]
+        if not ids:
+            _err(f"error: no unit matches '{args.unit}'")
+            return 2
+        ids = ids[:5]
+        if args.json:
+            print(json.dumps([{
+                "unit_id": u,
+                "calls": [e.__dict__ for e in graph.edges_from(u)],
+                "called_by": [e.__dict__ for e in graph.edges_to(u)],
+            } for u in ids], indent=2))
+            return 0
+        for unit_id in ids:
+            node = graph.nodes[unit_id]
+            print(f"{unit_id}{'' if node.parse_status == 'ok' else f'  [{node.parse_status}]'}")
+            outgoing, incoming = graph.edges_from(unit_id), graph.edges_to(unit_id)
+            print("  calls:" + ("" if outgoing else " (none)"))
+            for e in outgoing:
+                print(f"    -> {e.target}  ({e.relation}, line {e.line}, {e.method})" + (f"  via {e.detail}" if e.detail else ""))
+            print("  called by:" + ("" if incoming else " (none)"))
+            for e in incoming:
+                print(f"    <- {e.source}  ({e.relation}, line {e.line}, {e.method})" + (f"  via {e.detail}" if e.detail else ""))
+            print()
+        return 0
+    if args.json:
+        print(json.dumps(graph.to_dict(), indent=2))
+        return 0
+    calls = [e for e in graph.edges if e.relation == REL_CALLS]
+    api = [e for e in graph.edges if e.relation == REL_USES_API]
+    print(f"nodes: {len(graph.nodes)}   edges: {len(graph.edges)} ({len(calls)} calls, {len(api)} uses_api)   "
+          f"ambiguous calls: {len(graph.ambiguous)}")
+    for e in graph.edges:
+        print(f"  {e.source} -> {e.target}  ({e.relation}, line {e.line})")
+    for a in graph.ambiguous:
+        print(f"  ambiguous: {a.source} calls {a.name} (line {a.line}): {', '.join(a.candidates)}")
+    return 0
+
+
 def _load(args, corpus: str):
     corpus_path = Path(corpus)
     if not corpus_path.exists():
@@ -281,24 +459,72 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
 
+def _parse_ks(text: Optional[str]) -> List[int]:
+    if not text:
+        return []
+    try:
+        ks = sorted({int(x) for x in text.split(",") if x.strip()})
+    except ValueError:
+        ks = []
+    if not ks or any(k < 1 for k in ks):
+        raise ValueError("--ks must be a comma list of positive integers, e.g. 1,3,5")
+    return ks
+
+
+def _write_tuning_log(rows, mode: str, args, out_dir: Path) -> Path:
+    names = list(rows[0]["weights"]) if rows else []
+    lines = [f"# Weight tuning: {mode} (dev only)", "",
+             f"Grid step {args.step}, selection metric nDCG@k at K = {args.k}, {rows[0]['n'] if rows else 0} dev queries. "
+             "Ties on nDCG@k and MRR go to the more text-heavy weights. The test split is not read."
+             + (f" Constraint: every signal keeps a weight of at least {args.min_weight:g}." if args.min_weight else ""), "",
+             "| " + " | ".join(names) + " | P@k | R@k | MRR | nDCG@k |", "|" + "---|" * (len(names) + 4)]
+    for row in rows:
+        lines.append("| " + " | ".join(f"{row['weights'][n]:.2f}" for n in names) + " | "
+                     + " | ".join(f"{row[m]:.3f}" for m in ("P@k", "R@k", "MRR", "nDCG@k")) + " |")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / (f"tuning_{mode}_min{args.min_weight:g}.md" if args.min_weight else f"tuning_{mode}.md")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def _write_run_info(args, cfg, variants, ks, splits, baseline, out_dir: Path) -> Path:
+    lock_path = Path(args.queries).with_name("split.lock")
+    try:
+        lock = json.loads(lock_path.read_text(encoding="utf-8")) if lock_path.exists() else None
+    except (OSError, ValueError):
+        lock = None
+    keys = ("weights", "text_graph_weights", "text_ast_graph_weights", "hybrid_weights", "bm25")
+    info = {"queries": args.queries, "labels": args.labels, "corpus": args.corpus, "variants": variants, "ks": ks,
+            "splits": list(splits), "baseline": baseline, "benchmark_lock": lock,
+            "weights": {k: cfg[k] for k in keys if k in cfg}, "python": sys.version.split()[0]}
+    path = out_dir / "run.json"
+    path.write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
 def _experiment_command(args, cfg) -> int:
+    from structsearch.experiments.report import write_report
     from structsearch.experiments.runner import (
         load_labels, load_queries, parse_variant, run_experiment, tune_weights, write_results,
     )
 
     try:
+        ks = _parse_ks(args.ks)
         queries, labels = load_queries(args.queries), load_labels(args.labels)
         variants = [v.strip() for v in args.variants.split(",") if v.strip()]
         for v in variants:
             parse_variant(v)
         splits = ("dev", "test") if args.final else ("dev",)
         if args.tune:
-            rows = tune_weights(queries, labels, args.tune, cfg, args.corpus, args.index_dir, args.k, args.step, args.embedder)
+            rows = tune_weights(queries, labels, args.tune, cfg, args.corpus, args.index_dir, args.k, args.step, args.embedder,
+                                min_weight=args.min_weight)
             print(f"weights tuned on dev only ({args.tune}); best first:")
             for row in rows[:5]:
                 print(f"  {row['weights']}  nDCG@k={row['nDCG@k']:.3f} MRR={row['MRR']:.3f} (n={row['n']})")
+            print("wrote: " + str(_write_tuning_log(rows, args.tune, args, Path(args.out))))
             return 0
-        result = run_experiment(queries, labels, variants, cfg, args.corpus, args.index_dir, args.k, splits,
+        k_run = max(ks) if ks else args.k
+        result = run_experiment(queries, labels, variants, cfg, args.corpus, args.index_dir, k_run, splits,
                                 llm=_llm_settings(args, cfg), embedder=args.embedder)
     except (OSError, ValueError, KeyError, SearchError) as exc:
         _err(f"error: {exc}")
@@ -306,8 +532,17 @@ def _experiment_command(args, cfg) -> int:
     except EmbeddingError as exc:
         _err(f"error: {exc}")
         return 3
-    files = write_results(result, Path(args.out), args.k)
+    files = write_results(result, Path(args.out), k_run)
     print((Path(args.out) / "results.md").read_text(encoding="utf-8"))
+    if ks:
+        baseline = args.baseline or variants[0]
+        try:
+            files += write_report(result, labels, Path(args.out), ks, baseline)
+        except ValueError as exc:
+            _err(f"error: {exc}")
+            return 2
+        files.append(_write_run_info(args, cfg, variants, ks, splits, baseline, Path(args.out)))
+        print((Path(args.out) / "report.md").read_text(encoding="utf-8"))
     print("wrote: " + ", ".join(str(f) for f in files))
     return 0
 
@@ -382,6 +617,12 @@ def _run(args, cfg) -> int:
         return _profile_command(args, cfg)
     if args.command == "fragments":
         return _fragments_command(args)
+    if args.command == "graph":
+        return _graph_command(args)
+    if args.command == "benchmark":
+        return _benchmark_command(args)
+    if args.command == "security":
+        return _security_command(args)
 
     if args.command == "index":
         loaded = _load(args, args.corpus)
@@ -415,6 +656,7 @@ def _run(args, cfg) -> int:
         model=args.model,
         llm=_llm_settings(args, cfg),
         patterns=list(args.pattern),
+        intents=list(args.intent),
         weights=list(args.weight),
     )
     try:

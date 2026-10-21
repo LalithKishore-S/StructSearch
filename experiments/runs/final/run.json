@@ -1,0 +1,63 @@
+{
+  "queries": "experiments/benchmark/queries.json",
+  "labels": "experiments/benchmark/labels.jsonl",
+  "corpus": "tests/fixtures/sample_corpus",
+  "variants": [
+    "bm25",
+    "text_ast",
+    "text_graph",
+    "text_ast_graph",
+    "text_ast_graph-text",
+    "text_ast_graph-structural",
+    "text_ast_graph-graph"
+  ],
+  "ks": [
+    1,
+    3,
+    5
+  ],
+  "splits": [
+    "dev",
+    "test"
+  ],
+  "baseline": "bm25",
+  "benchmark_lock": {
+    "queries_sha256": "17abed8cc664b41d661b558086ea98f685e6c08f9ea7a9b8a95a8f5bc1f36f21",
+    "labels_sha256": "f28949128183c4ee586fa7fdd8887056cbc7810f291909ea3e3a4d4d07f0a5c4",
+    "queries": 34,
+    "labels": 544
+  },
+  "weights": {
+    "weights": {
+      "text": 0.75,
+      "structural": 0.25,
+      "graph": 0.0
+    },
+    "text_graph_weights": {
+      "text": 0.5,
+      "graph": 0.5
+    },
+    "text_ast_graph_weights": {
+      "text": 0.25,
+      "structural": 0.25,
+      "graph": 0.5
+    },
+    "hybrid_weights": {
+      "text": 0.4,
+      "dense": 0.3,
+      "structural": 0.2,
+      "graph": 0.1
+    },
+    "bm25": {
+      "k1": 1.5,
+      "b": 0.75,
+      "field_weights": {
+        "name": 3.0,
+        "identifiers": 2.0,
+        "doc": 1.5,
+        "code": 1.0
+      }
+    }
+  },
+  "python": "3.12.2"
+}

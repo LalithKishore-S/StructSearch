@@ -1,8 +1,9 @@
 """Step 8 experiment runner: variants x queries -> per-query metrics, tables, failures.
 
-Queries file (JSON list or JSONL): {"query_id","query","category","split"[, "patterns":[...]]}
+Queries file (JSON list or JSONL): {"query_id","query","category","split"[, "patterns":[...]][, "intents":[...]]}
+("intents" fixes the call-graph relationships instead of reading them from the query text.)
 Labels file (JSON list, JSONL or CSV), EvaluationLabel fields: query_id, unit_id, relevance, query_category, split.
-Variant names: bm25 | dense | structural | like | text_ast | hybrid, optionally "+llm" (query mapped by Ollama,
+Variant names: bm25 | dense | structural | like | text_ast | text_graph | hybrid, optionally "+llm" (query mapped by Ollama,
 falls back to rules), e.g. "text_ast+llm". Fusion weights can be overridden per variant via `weight_sets`.
 """
 from __future__ import annotations
@@ -14,7 +15,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from structsearch.experiments.metrics import METRICS, evaluate_ranking, mean_metrics
+from structsearch.evaluation.labels import read_records
+from structsearch.evaluation.metrics import METRICS, evaluate_ranking, mean_metrics
 from structsearch.interface.service import MODES, SearchError, SearchRequest, run_search
 from structsearch.llm.ollama import LLMSettings
 
@@ -28,16 +30,10 @@ class Query:
     category: str = "lexical"
     split: str = "dev"
     patterns: List[str] = field(default_factory=list)
+    intents: List[str] = field(default_factory=list)
 
 
-def _read_records(path: Path) -> List[Dict[str, Any]]:
-    text = Path(path).read_text(encoding="utf-8")
-    if str(path).endswith(".csv"):
-        return list(csv.DictReader(text.splitlines()))
-    stripped = text.lstrip()
-    if stripped.startswith("["):
-        return json.loads(text)
-    return [json.loads(line) for line in text.splitlines() if line.strip()]
+_read_records = read_records
 
 
 def load_queries(path: Path) -> List[Query]:
@@ -45,7 +41,7 @@ def load_queries(path: Path) -> List[Query]:
     for rec in _read_records(path):
         q = Query(
             str(rec["query_id"]), str(rec["query"]), rec.get("category") or rec.get("query_category") or "lexical",
-            rec.get("split", "dev"), list(rec.get("patterns") or []),
+            rec.get("split", "dev"), list(rec.get("patterns") or []), list(rec.get("intents") or []),
         )
         if q.split not in ("dev", "test"):
             raise ValueError(f"{q.query_id}: split must be dev or test")
@@ -64,21 +60,47 @@ def load_labels(path: Path) -> Dict[str, Dict[str, int]]:
     return out
 
 
+MODE_SIGNALS = {
+    "text_ast": ("text", "structural"),
+    "text_graph": ("text", "graph"),
+    "text_ast_graph": ("text", "structural", "graph"),
+    "hybrid": ("text", "dense", "structural", "graph"),
+}
+
+
 def parse_variant(name: str) -> Tuple[str, bool]:
-    base, plus, flag = name.partition("+")
+    """(mode, use_llm) of a variant name: `<mode>[+llm][-<signal>...]`. A `-signal` suffix removes that signal
+    from a fused mode (its weight is set to 0), e.g. `text_ast_graph-graph`."""
+    head, *removed = name.split("-")
+    base, plus, flag = head.partition("+")
     if base not in MODES:
         raise ValueError(f"unknown variant '{name}' (modes: {', '.join(MODES)})")
     if plus and flag != "llm":
         raise ValueError(f"unknown variant suffix '+{flag}' (only +llm)")
+    if removed:
+        signals = MODE_SIGNALS.get(base)
+        if signals is None:
+            raise ValueError(f"'{name}': only fused modes ({', '.join(MODE_SIGNALS)}) can have a signal removed")
+        bad = [s for s in removed if s not in signals]
+        if bad:
+            raise ValueError(f"'{name}': {', '.join(bad)} is not a signal of {base} ({', '.join(signals)})")
+        if len(set(removed)) >= len(signals):
+            raise ValueError(f"'{name}': at least one signal must remain")
     return base, bool(plus)
+
+
+def variant_ablations(name: str) -> List[str]:
+    """Signals removed by a variant name (`text_ast_graph-graph` -> ['graph'])."""
+    return name.split("-")[1:]
 
 
 def _rank(variant: str, q: Query, k: int, corpus: str, index_dir: str, cfg: Mapping[str, Any],
           llm: LLMSettings, embedder: Optional[str], weights: List[str]) -> List[str]:
     mode, use_llm = parse_variant(variant)
+    weights = list(weights) + [f"{signal}=0" for signal in variant_ablations(variant)]
     settings = LLMSettings(**{**llm.__dict__, "enabled": True}) if use_llm else LLMSettings(**{**llm.__dict__, "enabled": False})
     req = SearchRequest(query=q.query, mode=mode, k=k, corpus=corpus, index_dir=index_dir, query_id=q.query_id,
-                        embedder=embedder, llm=settings, patterns=q.patterns, weights=weights)
+                        embedder=embedder, llm=settings, patterns=q.patterns, intents=q.intents, weights=weights)
     return [r.unit_id for r in run_search(req, dict(cfg)).results]
 
 
@@ -134,24 +156,37 @@ def run_experiment(
     return {"per_query": per_query, "summary": summary, "failures": failures, "skipped": skipped}
 
 
+TUNED_SIGNALS = {
+    "text_ast": ["text", "structural"],
+    "text_graph": ["text", "graph"],
+    "text_ast_graph": ["text", "structural", "graph"],
+    "hybrid": ["text", "dense", "structural", "graph"],
+}
+
+
 def tune_weights(
     queries: Sequence[Query], labels: Mapping[str, Mapping[str, int]], mode: str, cfg: Mapping[str, Any],
     corpus: str, index_dir: str, k: int = 10, step: float = 0.25, embedder: Optional[str] = None,
-    metric: str = "nDCG@k",
+    metric: str = "nDCG@k", min_weight: float = 0.0,
 ) -> List[Dict[str, Any]]:
-    """Grid search over fusion weights on DEV queries only. Returns rows sorted best first."""
-    names = ["text", "dense", "structural"] if mode == "hybrid" else ["text", "structural"]
+    """Grid search over fusion weights on DEV queries only. Returns rows sorted best first.
+
+    With `min_weight` > 0 every signal of the mode keeps at least that weight, so the tuned variant stays
+    the variant it is named after (a weight of 0 would turn it into a smaller one)."""
+    names = TUNED_SIGNALS[mode]
     n = int(round(1 / step))
-    grid = [c for c in itertools.product(range(n + 1), repeat=len(names)) if sum(c) == n]
+    floor = int(round(min_weight * n))
+    grid = [c for c in itertools.product(range(n + 1), repeat=len(names)) if sum(c) == n and min(c) >= floor]
     rows = []
     for combo in grid:
-        weights = [f"{name}={c / n}" for name, c in zip(names, combo)] + ["graph=0"]
+        weights = [f"{name}={c / n}" for name, c in zip(names, combo)]
         res = run_experiment(queries, labels, [mode], cfg, corpus, index_dir, k, ("dev",), embedder=embedder,
                              weight_sets={mode: weights})
         s = next((x for x in res["summary"] if x["category"] == "all"), None)
         if s:
             rows.append({"weights": dict(zip(names, [c / n for c in combo])), **{m: s[m] for m in METRICS}, "n": s["n"]})
-    return sorted(rows, key=lambda r: (-r[metric], -r["MRR"], json.dumps(r["weights"])))
+    # ties go to the more text-heavy weights: when the structure/graph signals show no gain on dev, stay close to BM25
+    return sorted(rows, key=lambda r: (-r[metric], -r["MRR"], -r["weights"].get("text", 0.0), json.dumps(r["weights"])))
 
 
 def write_results(result: Mapping[str, Any], out_dir: Path, k: int) -> List[Path]:
