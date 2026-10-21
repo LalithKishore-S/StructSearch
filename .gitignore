@@ -1,3 +1,8 @@
-.structsearch_index
-
+.structsearch_index*
+.venv
 results/
+__pycache__/
+*.pyc
+venv/
+.pytest_cache/
+.DS_Store
