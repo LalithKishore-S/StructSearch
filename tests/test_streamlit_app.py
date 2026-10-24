@@ -66,7 +66,7 @@ def test_page_opens_with_the_best_mode_and_a_hint(tmp_path):
     assert not at.exception
     assert "text_ast_graph" in "".join(c.value for c in at.sidebar.caption)
     assert "Type a query" in texts(at)
-    assert [t.label for t in at.tabs] == ["Search", "Security candidates", "Call graph"]
+    assert [t.label for t in at.tabs] == ["Search", "Security candidates", "Call graph", "Results"]
 
 
 def test_searching_shows_understanding_breakdown_graph_and_results(tmp_path):
@@ -148,3 +148,80 @@ def test_every_example_label_is_selectable(tmp_path):
     at = app(tmp_path)
     options = list(at.selectbox(key="example").options)
     assert options[0] == "(none)" and len(options) == len(DEMO_QUERIES) + 1
+
+
+# ------------------------------------------------------------------ the Results tab
+
+
+def chart_count(at):
+    return len(at.get("arrow_vega_lite_chart")) + len(at.get("vega_lite_chart")) + len(at.get("arrow_chart"))
+
+
+def table_rows(at, first_column):
+    for frame in at.dataframe:
+        df = frame.value
+        if first_column in df.columns:
+            return df
+    raise AssertionError(f"no table with column {first_column}")
+
+
+def test_results_tab_defaults_to_the_test_split(tmp_path):
+    at = app(tmp_path)
+    assert not at.exception
+    body = texts(at)
+    assert "Test split" in body and "run once" in body and "frozen benchmark" in body
+    assert "1. Variants compared (14 queries)" in body
+    assert chart_count(at) >= 2  # variants and ablation
+    variants = table_rows(at, "variant")
+    full = variants[variants["variant"] == "Full (Text + AST + Graph)"].iloc[0]
+    base = variants[variants["variant"] == "BM25 (baseline)"].iloc[0]
+    assert full["nDCG@K"] == pytest.approx(0.952, abs=1e-3) and base["nDCG@K"] == pytest.approx(0.787, abs=1e-3)
+
+
+def test_results_tab_development_split_is_marked_optimistic(tmp_path):
+    at = app(tmp_path)
+    at.radio(key="res_split").set_value("Development split").run()
+    assert not at.exception
+    body = texts(at)
+    assert "optimistic" in body and "(20 queries)" in body
+
+
+def test_results_tab_controls_and_relationship_view(tmp_path):
+    at = app(tmp_path)
+    at.select_slider(key="res_k").set_value(1).run()
+    assert not at.exception
+    at.selectbox(key="res_category").select("Relationship").run()
+    assert not at.exception and "(8 queries)" in texts(at)
+    at.selectbox(key="res_metric").select("MRR").run()
+    assert not at.exception
+    paired = table_rows(at, "better")
+    full = paired[paired["variant"] == "Full (Text + AST + Graph)"].iloc[0]
+    assert (full["queries"], full["better"], full["same"], full["worse"]) == (8, 2, 6, 0)  # K = 1, from paired.csv
+
+
+def test_results_tab_lists_what_improved_and_what_did_not(tmp_path):
+    at = app(tmp_path)
+    body = "\n".join(m.value for m in at.markdown)
+    assert "**R17** opening files without catching exceptions" in body and "**L12**" in body
+    assert "rank none with BM25" in body
+
+
+def test_results_tab_query_inspector(tmp_path):
+    at = app(tmp_path)
+    at.selectbox(key="result_query").select("R17").run()
+    assert not at.exception
+    body = texts(at)
+    assert "opening files without catching exceptions" in body and "`read_lines`" in body and "`write_log`" in body
+    detail = table_rows(at, "first correct at rank")
+    bm25 = detail[detail["variant"] == "BM25 (baseline)"].iloc[0]
+    full = detail[detail["variant"] == "Full (Text + AST + Graph)"].iloc[0]
+    assert bm25["first correct at rank"] == "-" and full["first correct at rank"] == "2"
+    assert full["rank 2"].startswith("[correct]")
+
+
+def test_results_tab_without_a_run_explains_how_to_make_one(tmp_path, monkeypatch):
+    from structsearch.interface import results_data
+
+    monkeypatch.setattr(results_data, "DEFAULT_RUN", tmp_path / "nothing")
+    at = app(tmp_path)
+    assert not at.exception and any("No experiment results found" in i.value for i in at.info)

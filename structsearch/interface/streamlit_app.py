@@ -1,7 +1,8 @@
 """Streamlit front end:  streamlit run structsearch/interface/streamlit_app.py
 
-Three tabs: Search (how the query was understood, score breakdown per signal, the evidence graph the ranking used,
-code and evidence), Security candidates (SQL-construction candidates for review) and Call graph (the whole graph).
+Four tabs: Search (how the query was understood, score breakdown per signal, the evidence graph the ranking used,
+code and evidence), Security candidates (SQL-construction candidates for review), Call graph (the whole graph) and
+Results (the experiment: variants, ablations, per-query errors, read from experiments/runs/).
 It ranks with the full model (BM25 + AST structure + call graph) and works offline; the other modes, custom weights
 and `llm` explanations are available from the command line.
 
@@ -21,6 +22,7 @@ if _ROOT not in sys.path:
 
 from structsearch.config import load_config
 from structsearch.graph import CodeGraph, ensure_graph
+from structsearch.interface import results_data as rd
 from structsearch.interface.explain import explain_results
 from structsearch.interface.format import result_to_dict
 from structsearch.interface.service import SearchError, SearchRequest, SearchResponse, load_corpus, run_search
@@ -289,6 +291,108 @@ def _graph_tab(st, opts: Dict[str, Any]) -> None:
         st.markdown("- markers: " + (", ".join(f"`{m}` (line {ln})" for m, ln, _ in card["markers"]) or "none"))
 
 
+METRIC_CHOICES = {"nDCG@k": "nDCG@K", "MRR": "MRR", "P@k": "Precision@K", "R@k": "Recall@K", "hit@k": "Hit@K (any relevant in top K)"}
+OUTCOME_WORDS = {"win": "better than BM25", "tie": "same as BM25", "loss": "worse than BM25"}
+
+
+def _bar_chart(st, rows: List[Dict[str, Any]], value_title: str, color_domain: Sequence[str]) -> None:
+    import altair as alt
+
+    chart = alt.Chart(alt.Data(values=rows)).mark_bar().encode(
+        y=alt.Y("label:N", sort=color_domain, title=None),
+        x=alt.X("value:Q", title=value_title, scale=alt.Scale(domain=[min(0, min(r["value"] for r in rows)), 1])),
+        color=alt.Color("label:N", scale=alt.Scale(domain=list(color_domain)), legend=None),
+        tooltip=["label:N", alt.Tooltip("value:Q", format=".3f")],
+    ).properties(height=34 * len(rows) + 20)
+    _stretch(st.altair_chart, chart)
+
+
+def _short_unit(unit_id: str) -> str:
+    return unit_id.split("::", 1)[-1]
+
+
+def _results_tab(st) -> None:
+    run = rd.load_results()
+    if run is None:
+        st.info("No experiment results found in `experiments/runs/final`. Produce them with "
+                "`experiments/run_experiments.sh final` (see README_STEP18.md).")
+        return
+    left, middle, right, metric_col = st.columns([2, 1, 2, 2])
+    split = {"Test split": "test", "Development split": "dev"}[left.radio("Queries", ["Test split", "Development split"], key="res_split")]
+    k = middle.select_slider("K", options=[1, 3, 5], value=3, key="res_k")
+    category = {"All queries": "all", "Lexical": "lexical", "Relationship": "relationship"}[
+        right.selectbox("Query type", ["All queries", "Lexical", "Relationship"], key="res_category")]
+    metric = metric_col.selectbox("Metric", list(METRIC_CHOICES), format_func=METRIC_CHOICES.get, key="res_metric")
+    st.caption(rd.split_note(split))
+    if run.benchmark_matches_lock is False:
+        st.error("The benchmark has changed since this run: these results no longer match the current queries and labels.")
+    elif run.benchmark_matches_lock:
+        st.caption("These results were produced on the frozen benchmark, which has not changed since.")
+
+    rows = rd.metric_rows(run, split, category, k)
+    n = rows[0]["n"] if rows else 0
+    st.subheader(f"1. Variants compared ({n} queries)")
+    _bar_chart(st, [{"label": r["label"], "value": r[metric]} for r in rows], f"{METRIC_CHOICES[metric]} at K = {k}",
+               [rd.VARIANT_LABELS[v] for v in rd.VARIANT_ORDER])
+    st.dataframe([{"variant": r["label"], **{METRIC_CHOICES[m]: round(r[m], 3) for m in METRIC_CHOICES}} for r in rows],
+                 hide_index=True)
+
+    st.subheader("2. What each signal contributes (ablation)")
+    ablation = rd.ablation_rows(run, split, category, k, metric)
+    _bar_chart(st, [{"label": r["label"], "value": r["value"]} for r in ablation], f"{METRIC_CHOICES[metric]} at K = {k}",
+               [rd.VARIANT_LABELS[v] for v in rd.ABLATIONS])
+    st.dataframe([{"variant": r["label"], METRIC_CHOICES[metric]: round(r["value"], 3), "change vs full": f"{r['delta']:+.3f}"}
+                  for r in ablation], hide_index=True)
+    st.caption("Removing a signal sets its weight to 0 and leaves the others as tuned. A larger drop means the signal matters more.")
+
+    st.subheader("3. Query by query against BM25")
+    paired = rd.paired_rows(run, split, category, k)
+    st.dataframe([{"variant": r["label"], "queries": r["n"], "better": r["wins"], "same": r["ties"], "worse": r["losses"],
+                   "mean nDCG change": round(r["mean_diff"], 3), "sign-test p": round(r["p_value"], 3)} for r in paired],
+                 hide_index=True)
+    st.caption("Counts are queries for which the variant ranked better, the same or worse than BM25 (nDCG@K). The p-value is an "
+               "exact sign test; with this few queries it has little power, so read the counts.")
+
+    st.subheader("4. Where the full model improves or fails")
+    outcomes = rd.query_outcomes(run, split, rd.FULL, rd.BASELINE, k)
+    if category != "all":
+        outcomes = [o for o in outcomes if o["category"] == category]
+    groups = rd.error_analysis(outcomes)
+    titles = {"improved": "Improved over BM25", "regressed": "Worse than BM25", "solved": "Already right with BM25 (no change)",
+              "unsolved": "Not fully solved by the full model"}
+    for key in ("improved", "regressed", "unsolved", "solved"):
+        items = groups[key]
+        with st.expander(f"{titles[key]}: {len(items)}", expanded=key in ("improved", "unsolved")):
+            if not items:
+                st.caption("none")
+            for o in items:
+                where = (f"first correct answer: rank {o['baseline_rank'] or 'none'} with BM25, "
+                         f"rank {o['variant_rank'] or 'none'} with the full model")
+                st.markdown(f"- **{o['query_id']}** {o['query']} ({o['category']}): {where}; nDCG {o['baseline_ndcg']:.2f} -> {o['variant_ndcg']:.2f}")
+
+    st.subheader("5. Inspect one query")
+    order = {"win": 0, "loss": 1, "tie": 2}
+    listing = sorted(outcomes, key=lambda o: (order[o["outcome"]], o["query_id"]))
+    labels = {o["query_id"]: f"{o['query_id']} [{OUTCOME_WORDS[o['outcome']]}] {o['query']}" for o in listing}
+    if not listing:
+        return
+    chosen = st.selectbox("Query", list(labels), format_func=labels.get, key="result_query")
+    detail = rd.query_detail(run, chosen, k)
+    st.markdown(f"**{detail['query']}**  ({detail['category']}, {detail['split']} split"
+                + (f", paraphrase group `{detail['group']}`" if detail["group"] else "") + ")")
+    st.markdown("Correct answers: " + ", ".join(f"`{_short_unit(u)}`" for u in detail["relevant"]))
+    if detail["notes"]:
+        st.caption(detail["notes"])
+    table = []
+    for v in detail["variants"]:
+        row: Dict[str, Any] = {"variant": v["label"], "first correct at rank": str(v["first_relevant"] or "-"), "nDCG": round(v["ndcg"], 2)}
+        for rank in range(1, k + 1):
+            item = v["ranking"][rank - 1] if rank <= len(v["ranking"]) else None
+            row[f"rank {rank}"] = "" if item is None else ("[correct] " if item["relevant"] else "[wrong] ") + _short_unit(item["unit_id"])
+        table.append(row)
+    st.dataframe(table, hide_index=True)
+
+
 def _apply_example() -> None:  # pragma: no cover - exercised through streamlit
     import streamlit as st
 
@@ -315,13 +419,15 @@ def main() -> None:
     opts = {"mode": MODE, "k": k, "corpus": corpus, "index_dir": index_dir, "explain": "template", "intents": [],
             "weights": [], "use_llm_mapper": False, "patterns": []}
     st.text_input("Query", key="query", placeholder="function that opens a file without closing it")
-    search_tab, security_tab, graph_tab = st.tabs(["Search", "Security candidates", "Call graph"])
+    search_tab, security_tab, graph_tab, results_tab = st.tabs(["Search", "Security candidates", "Call graph", "Results"])
     with search_tab:
         _search_tab(st, opts)
     with security_tab:
         _security_tab(st, opts)
     with graph_tab:
         _graph_tab(st, opts)
+    with results_tab:
+        _results_tab(st)
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -85,11 +85,12 @@ Status messages go to stderr, so `--json` output on stdout stays clean. Exit cod
 
 ## The app
 
-`python -m streamlit run structsearch/interface/streamlit_app.py` opens a browser page with three tabs:
+`python -m streamlit run structsearch/interface/streamlit_app.py` opens a browser page with four tabs:
 
 - **Search**: how the query was understood (the relationship found and the words that triggered it), a stacked bar of what each signal contributed to each result, the evidence graph the ranking used (red edges, with line numbers), and the code with its evidence. The sidebar has example queries, each with the answer expected from the code.
 - **Security candidates**: the SQL-construction scan with its source, sink and validation notes.
 - **Call graph**: the whole graph grouped by file, with a card per function.
+- **Results**: the experiment, interactively: the variants compared, the ablations, a query-by-query comparison with BM25, where the full model improves or fails, and a per-query inspector (test split by default).
 
 ## Evaluation
 
@@ -172,4 +173,5 @@ Each implementation step has its own README with commands and design notes.
 | [16](README_STEP16.md) | benchmark: queries, labels, protocol, freeze |
 | [17](README_STEP17.md) | security demo |
 | [18](README_STEP18.md) | experiments: tuning, comparison, ablations, test results |
-| [19](README_STEP19.md) | Streamlit app |
+| [19](README_STEP19.md) | Streamlit app: search, security and call-graph tabs |
+| [20](README_STEP20.md) | Results tab: experiments inside the app |

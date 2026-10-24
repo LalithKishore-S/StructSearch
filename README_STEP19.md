@@ -56,4 +56,4 @@ Things to check by hand: select different results in *Highlight the evidence of*
 - The app does not use dense embeddings or LLM explanations (they need Ollama and were not run).
 
 ## Next
-Step 20: results inside the app (metrics, ablations, per-query error analysis).
+Step 20: the Results tab (see README_STEP20.md).
