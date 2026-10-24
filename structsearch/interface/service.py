@@ -73,6 +73,7 @@ class SearchResponse:
     units_by_id: Dict[str, CodeUnit]
     total_units: int
     extra: Dict[str, Any] = field(default_factory=dict)  # profile, fusion, embedding_model
+    graph_result: Optional[GraphResult] = None  # scores, evidence and edges of the graph signal (graph modes only)
 
 
 # --------------------------------------------------------------------------- building blocks
@@ -199,6 +200,7 @@ def run_search(
     units_by_id = {u.unit_id: u for u in units}
     failed_by_path = {f.rel_path: f for f in load_failed(Path(req.index_dir) / FAILED_FILE)}
     extra: Dict[str, Any] = {}
+    graph_result: Optional[GraphResult] = None
 
     def no_terms_note() -> None:
         if not tokenize_query(req.query):
@@ -261,4 +263,4 @@ def run_search(
         no_terms_note()
         results = bm25_search(bm25_index, units_by_id, req.query, req.k, req.query_id, failed_by_path)
 
-    return SearchResponse(req, results, units_by_id, len(units), extra)
+    return SearchResponse(req, results, units_by_id, len(units), extra, graph_result)

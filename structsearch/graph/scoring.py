@@ -73,29 +73,39 @@ _NEGATION = {"without", "missing", "unvalidated", "unsanitized", "unsanitised", 
 _IMPLIES_NO_VALIDATION = {"unvalidated", "unsanitized", "unsanitised", "unchecked", "unsafe"}
 
 
+def graph_intent_trace(query: str) -> Dict[str, List[str]]:
+    """How a query is read: the words of the query that triggered each part, and the resulting relationships.
+
+    Keys: validation, database, file, negation, injection, recursion (matched words, in query order) and
+    intents (as `graph_intents`)."""
+    words = _WORDS.findall(query.lower())
+    validation = [w for w in words if w.startswith(_VALIDATION_STEMS)]
+    database = [w for w in words if w in _DB_WORDS]
+    file = [w for w in words if w in _FILE_WORDS]
+    negation = [w for w in words if w in _NEGATION]
+    injection = [w for w in words if w.startswith("inject")]
+    recursion = [w for w in words if w.startswith("recurs") or w == "itself"]
+    no_validation_word = any(w in _IMPLIES_NO_VALIDATION for w in words)
+    found = set()
+    if database and (injection or (negation and (validation or no_validation_word))):
+        found.add("unvalidated_db")
+    elif database and validation:
+        found.add("validated_db")
+    elif database:
+        found.add("db_access")
+    elif validation:
+        found.add("calls_validator")
+    if file:
+        found.add("file_access")
+    if recursion:
+        found.add("recursive")
+    return {"validation": validation, "database": database, "file": file, "negation": negation,
+            "injection": injection, "recursion": recursion, "intents": [i for i in INTENTS if i in found]}
+
+
 def graph_intents(query: str) -> List[str]:
     """Relationships (in INTENTS order) a query asks for; empty if it asks for none the graph can express."""
-    words = _WORDS.findall(query.lower())
-    has_validation = any(w.startswith(_VALIDATION_STEMS) for w in words)
-    has_db = any(w in _DB_WORDS for w in words)
-    has_file = any(w in _FILE_WORDS for w in words)
-    negated = any(w in _NEGATION for w in words)
-    no_validation_word = any(w in _IMPLIES_NO_VALIDATION for w in words)
-    injection = any(w.startswith("inject") for w in words)
-    found = set()
-    if has_db and (injection or (negated and (has_validation or no_validation_word))):
-        found.add("unvalidated_db")
-    elif has_db and has_validation:
-        found.add("validated_db")
-    elif has_db:
-        found.add("db_access")
-    elif has_validation:
-        found.add("calls_validator")
-    if has_file:
-        found.add("file_access")
-    if any(w.startswith("recurs") or w == "itself" for w in words):
-        found.add("recursive")
-    return [i for i in INTENTS if i in found]
+    return graph_intent_trace(query)["intents"]
 
 
 # --------------------------------------------------------------------------- result
@@ -106,6 +116,7 @@ class GraphResult:
     scores: Dict[str, float] = field(default_factory=dict)  # unit_id -> score in (0, 1]; absent = 0
     evidence: Dict[str, List[str]] = field(default_factory=dict)  # unit_id -> factual lines
     intents: List[str] = field(default_factory=list)
+    edges: Dict[str, List[GraphEdge]] = field(default_factory=dict)  # unit_id -> the graph edges behind the evidence
 
 
 @dataclass
@@ -132,6 +143,7 @@ class _Scorer:
         self.graph = graph
         self.validators = self._structural_validators(ast_records)
         self._reach: Dict[str, Dict[str, _Site]] = {}
+        self.used: List[GraphEdge] = []  # edges that produced an evidence line since the last reset
 
     # ---- helpers
 
@@ -149,9 +161,11 @@ class _Scorer:
         return node.qualname if node else unit_id
 
     def edge_line(self, edge: GraphEdge) -> str:
+        self.used.append(edge)
         return f"edge: {self.name(edge.source)} -> {self.name(edge.target)} (call, line {edge.line})"
 
     def marker_line(self, edge: GraphEdge, owner: Optional[str] = None) -> str:
+        self.used.append(edge)
         where = f" in {self.name(owner)}" if owner else ""
         return f"marker: {edge.target} at line {edge.line}{where} ({edge.detail})"
 
@@ -338,13 +352,16 @@ def score_graph(
         return result
     scorer = _Scorer(graph, ast_records)
     for unit_id in graph.nodes:
-        total, evidence = 0.0, []
+        total, evidence, edges = 0.0, [], []
         for intent in chosen:
+            scorer.used = []
             value, lines = getattr(scorer, intent)(unit_id)
             if value > 0:
                 total += value
                 evidence += [line for line in lines if line not in evidence]
+                edges += [e for e in scorer.used if e not in edges]
         if total > 0:
             result.scores[unit_id] = total / len(chosen)
             result.evidence[unit_id] = evidence
+            result.edges[unit_id] = edges
     return result

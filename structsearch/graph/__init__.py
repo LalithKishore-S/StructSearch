@@ -26,6 +26,7 @@ from structsearch.graph.scoring import (
     INTENT_DOC,
     INTENTS,
     GraphResult,
+    graph_intent_trace,
     graph_intents,
     score_graph,
 )
@@ -55,6 +56,7 @@ __all__ = [
     "build_graph",
     "describe_markers",
     "ensure_graph",
+    "graph_intent_trace",
     "graph_intents",
     "load_graph",
     "match_markers",

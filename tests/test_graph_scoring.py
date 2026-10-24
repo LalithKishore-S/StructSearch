@@ -7,6 +7,7 @@ from structsearch.graph import (
     INTENT_DOC,
     GraphResult,
     build_graph,
+    graph_intent_trace,
     graph_intents,
     score_graph,
 )
@@ -272,3 +273,62 @@ def test_validation_two_calls_down_still_counts(tmp_path):
     graph, _ = make(tmp_path, WRAPPER + "\ndef outer(db, name):\n    return handler(db, name)\n")
     assert score_graph(graph, "validate input before database access").scores["m.py::outer"] == pytest.approx(0.5)
     assert "m.py::outer" not in score_graph(graph, "database access without validation").scores
+
+
+# ------------------------------------------------------------------ structured edges and the query trace
+
+
+def test_result_carries_the_edges_behind_the_evidence(fixture):
+    graph, _ = fixture
+    result = score_graph(graph, "validate user input before database access")
+    edges = result.edges["db.py::get_user"]
+    assert [(e.relation, e.target, e.line) for e in edges] == [
+        ("calls", "db.py::validate_user_input", 12),
+        ("uses_api", "validation:validate", 12),
+        ("uses_api", "db:execute", 13),
+    ]
+    assert all(e in graph.edges for edges in result.edges.values() for e in edges)
+    assert set(result.edges) == set(result.evidence) == set(result.scores)
+
+
+def test_edges_follow_the_call_chain_to_the_marker(tmp_path):
+    graph, _ = make(tmp_path, (
+        "def run_sql(db, q):\n    return db.execute(q)\n\n"
+        "def handler(db, x):\n    return run_sql(db, x)\n"
+    ))
+    edges = score_graph(graph, "database").edges["m.py::handler"]
+    assert [(e.source, e.target) for e in edges] == [("m.py::handler", "m.py::run_sql"), ("m.py::run_sql", "db:execute")]
+
+
+def test_recursion_edges_and_no_duplicates(fixture):
+    graph, _ = fixture
+    result = score_graph(graph, "recursive")
+    assert [(e.source, e.target, e.line) for e in result.edges["trees.py::factorial"]] == [
+        ("trees.py::factorial", "trees.py::factorial", 21)]
+    many = score_graph(graph, "validate input before database access and recursive")
+    for edges in many.edges.values():
+        assert len(edges) == len(set(edges))
+
+
+def test_empty_result_has_no_edges(fixture):
+    graph, _ = fixture
+    assert score_graph(graph, "convert camel case name to snake case").edges == {}
+
+
+def test_intent_trace_names_the_words_that_triggered_each_part():
+    trace = graph_intent_trace("queries that run without checking their input")
+    assert trace["intents"] == ["unvalidated_db"]
+    assert trace["database"] == ["queries"] and trace["validation"] == ["checking"] and trace["negation"] == ["without"]
+    assert trace["file"] == [] and trace["recursion"] == [] and trace["injection"] == []
+    assert graph_intent_trace("function that calls itself")["recursion"] == ["itself"]
+    assert graph_intent_trace("sql injection")["injection"] == ["injection"]
+    empty = graph_intent_trace("convert camel case name to snake case")
+    assert empty["intents"] == [] and not any(empty[k] for k in ("validation", "database", "file", "negation"))
+
+
+@pytest.mark.parametrize("query", [
+    "validate user input before database access", "database access without validation", "sql injection",
+    "opens a file", "recursive tree traversal", "check input", "functions that query the database", "", "tree",
+])
+def test_trace_intents_equal_graph_intents(query):
+    assert graph_intent_trace(query)["intents"] == graph_intents(query)

@@ -237,3 +237,20 @@ def test_cli_experiment_with_text_graph(capsys, tmp_path):
     out = capsys.readouterr().out
     assert code == 0 and "| text_graph | dev | all |" in out
     assert (tmp_path / "res" / "summary.csv").exists()
+
+
+# ------------------------------------------------------------------ structured graph result for front ends
+
+
+def test_response_carries_the_graph_result_only_in_graph_modes(cfg, tmp_path):
+    resp = search(cfg, tmp_path, RELATION_QUERY)
+    assert resp.graph_result is not None and resp.graph_result.intents == ["validated_db"]
+    assert "db.py::get_user" in resp.graph_result.edges
+    assert search(cfg, tmp_path, RELATION_QUERY, mode="text_ast").graph_result is None
+    assert search(cfg, tmp_path, RELATION_QUERY, mode="bm25").graph_result is None
+
+
+def test_cli_json_stays_free_of_structured_edges(capsys, tmp_path):
+    code, out, _ = run_cli(capsys, tmp_path, RELATION_QUERY, "--mode", "text_graph", "--json", "-k", "2", "--lines", "0")
+    payload = json.loads(out)
+    assert code == 0 and set(payload["graph"]) == {"intents", "scored_units"}
